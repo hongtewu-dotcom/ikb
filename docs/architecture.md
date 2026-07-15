@@ -1,10 +1,10 @@
-# individualKB 产品与架构方案
+# ikb 产品与架构方案
 
 ## 核心判断
 
 个人知识库的价值不在“记了多少”，在“下一次工作能不能拿到正确上下文，并用结果修正原来的认知”。系统必须同时管知识和工作，但两者不能混成一个目录：知识描述什么长期成立，Issue 描述当前要完成什么，Run 记录这次实际发生了什么。
 
-individualKB 因此分成三个平面：Knowledge Plane 保存长期事实、决策、偏好和方法；Execution Plane 用 Agent、Skill 和 Harness 执行工作；Control Plane 用 Multica 式界面管理 Issue、Run、门禁和产物。
+ikb 因此分成三个平面：Knowledge Plane 保存长期事实、决策、偏好和方法；Execution Plane 用 Agent、Skill 和 Harness 执行工作；Control Plane 用 Multica 式界面管理 Issue、Run、门禁和产物。
 
 ## 产品边界
 
@@ -12,7 +12,7 @@ individualKB 因此分成三个平面：Knowledge Plane 保存长期事实、决
 
 当前能力分散在 CatPaw Memory、Obsidian、Skills、SpecX、代码仓和任务平台中。Agent 能做单项工作，但经常缺少历史背景；记忆能提供最近上下文，却不适合承载正式知识；任务平台能展示状态，但不知道为什么这样决策。
 
-individualKB 把它们接成一条闭环：
+ikb 把它们接成一条闭环：
 
 ```text
 记录来源
@@ -127,7 +127,7 @@ Issue
 真实知识不直接放进公开仓库。推荐三类目录：
 
 ```text
-individualKB/                 # 公开代码、模板、脱敏示例
+ikb/                          # 公开代码、模板、脱敏示例
 ~/Knowledge/personal-vault/   # 个人知识，私有 Git 或本地备份
 ~/Knowledge/work-vault/       # 工作知识，本地或公司批准的内部存储
 ```
@@ -168,7 +168,7 @@ examples/
 
 ## 与现有系统的关系
 
-| 现有能力 | 在 individualKB 中的定位 | 复用方式 |
+| 现有能力 | 在 ikb 中的定位 | 复用方式 |
 |---|---|---|
 | CatPaw Memory | 热记忆 | 定期抽取候选知识；只回灌索引和近期重点 |
 | Obsidian | 人类知识工作台 | 直接打开 Vault；CLI/URI 是可选适配 |
