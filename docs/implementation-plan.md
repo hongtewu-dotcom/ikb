@@ -50,9 +50,9 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
 ## 技术基线
 
 - 语言与工程：Node LTS、TypeScript、pnpm workspace。
-- 契约：TypeScript 类型 + 运行时 schema 校验，数据库迁移版本化。
-- 工作账本：SQLite。不可变 `events` 表是真相源，Task/Run/Approval 等表是可重建投影。
-- 知识真相源：Markdown + Git。SQLite FTS5、Embedding 和关系索引都是可删除的派生数据。
+- 契约：TypeScript 类型 + 运行时 schema 校验，事件格式版本化。
+- 工作账本：`events.jsonl`。文件追加、哈希链和账本锁保证不可变事件；Task/Run/Approval 等状态由事件重放得到。
+- 知识真相源：Markdown + Git。FTS、Embedding 和关系索引都是可删除的派生数据；SQLite 只有在查询规模和并发确实需要时才作为索引层引入。
 - 运行证据：每个 Run 一个独立目录，关闭后只追加补充记录，不覆盖原始输入和事件。
 - 测试：单元测试、契约测试、迁移测试、崩溃恢复测试和纵向 E2E。
 - 界面：先普通 CLI；命令稳定后再增加 TUI；Web 最后建设。
@@ -64,9 +64,10 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
 ```text
 ~/.ikb/
   config.yaml                    # Vault、运行时和安全策略配置
-  control/
-    ikb.db                       # 事件账本与当前状态投影
-    backups/                     # SQLite 一致性备份
+  ledger/
+    events.jsonl                 # 不可变事件真相源
+    events.lock                  # 多进程写入锁
+  backups/                       # events.jsonl 与配置备份
   runs/
     <run-id>/
       input.json                 # Task 与参数快照
@@ -89,14 +90,14 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
 
 ### 不可变事件
 
-所有写操作统一为“校验命令 → 追加事件 → 更新投影”。首批事件包括：
+所有写操作统一为“校验命令 → 获取账本锁 → 追加 JSONL 事件 → 释放锁”。读取方按文件顺序重放事件得到当前状态，不维护第二套运行状态真相。首批事件包括：
 
 ```text
 task.created
 task.updated
 task.started
 task.waiting
-task.completed
+task.done
 task.canceled
 run.queued
 run.started
@@ -105,7 +106,7 @@ run.step_finished
 run.checkpointed
 run.awaiting_approval
 run.failed
-run.succeeded
+run.finished
 approval.requested
 approval.approved
 approval.rejected
@@ -119,18 +120,11 @@ knowledge.candidate_created
 
 ### 状态投影
 
-SQLite 至少包含：
+首版不持久化运行状态投影，CLI 启动时从 `events.jsonl` 重放。需要索引时再增加可删除的派生目录；它不能阻塞账本写入，也不能成为恢复依据。
 
-- `events`：不可变事件账本。
-- `tasks`：Task 当前状态、优先级、风险和验收摘要。
-- `runs`：运行状态、Agent/Skill 版本、开始结束时间和 checkpoint。
-- `approvals`：待审批动作、payload hash、决定和执行结果。
-- `artifacts`：产物路径、类型、内容 hash 和验证状态。
-- `knowledge_refs`：Task/Run 对知识的实际引用与验证结果。
-- `outbox`：已批准但尚未完成的外部动作，保证幂等和可恢复。
-- `schema_migrations`：数据库迁移历史。
+状态投影至少包含：Task 当前状态、Run 状态与 checkpoint、Approval 决定、Artifact 路径与 hash、Task/Run 的知识引用和待执行外部动作。
 
-`ikb ledger rebuild` 删除投影后从事件重建。重建结果与原状态不一致时，`ikb doctor` 必须报错，不能静默修复。
+`ikb ledger rebuild` 重新读取事件并输出投影摘要；`ikb doctor` 校验 JSONL 语法、payload hash、事件 hash 链和 Run 目录。任何异常都必须报错，不能静默修复。
 
 ### Approval 绑定
 
@@ -147,7 +141,7 @@ ikb show <task-or-run-id>
 ikb timeline <task-or-run-id>
 ikb doctor
 ikb backup
-ikb restore <backup-id>
+ikb restore <backup-dir> --yes
 ```
 
 `ikb status` 默认只显示需要注意的内容：active/waiting Task、running/failed Run、pending Approval、待复核知识和最近异常。
@@ -173,7 +167,7 @@ ikb run list [--status failed]
 ikb run show <run-id>
 ikb run follow <run-id>
 ikb run resume <run-id>
-ikb run retry <run-id> [--from <step>]
+ikb run retry <run-id> [--agent <agent-id>]
 ikb run cancel <run-id>
 
 ikb approval list
@@ -183,20 +177,19 @@ ikb approval reject <approval-id> --reason "..."
 
 ikb artifact list <run-id>
 ikb artifact open <artifact-id>
-ikb artifact diff <artifact-id>
+ikb artifact show <artifact-id>
 ```
 
 ### Knowledge 与报表
 
 ```text
-ikb capture <source>
-ikb ingest <source-id>
+ikb capture <source-file|text> --title "..."
+ikb ingest <markdown-file> [--scope work]
 ikb search "..." [--scope work]
-ikb context <task-id>
-ikb knowledge review [--due]
+ikb context <task-id> [--run <run-id>]
+ikb knowledge list|show|verify|retire|review
 ikb report daily [--format md|json]
 ikb report weekly [--format md|json]
-ikb export audit <task-id> [--redact]
 ```
 
 所有查询命令支持 `--output table|json`，方便人查看，也方便 Agent 和脚本消费。
@@ -213,13 +206,13 @@ ikb export audit <task-id> [--redact]
 
 ### P1：工程骨架，1～2 天
 
-交付：pnpm workspace、CLI 入口、配置加载、运行时 schema、测试框架、迁移框架、脱敏 demo Vault 和 CI。
+交付：pnpm workspace、CLI 入口、配置加载、运行时 schema、事件格式版本、测试框架、脱敏 demo Vault 和 CI。
 
 退出条件：全新目录执行 `ikb init` 后能生成配置与数据目录；重复执行不破坏已有数据；`ikb doctor` 能报告基础环境状态。
 
 ### P2：本地工作账本，3～5 天
 
-交付：事件表、Task/Run/Approval/Artifact 投影、运行目录、timeline、status、report、backup/restore 和 ledger rebuild。
+交付：JSONL 事件账本、Task/Run/Approval/Artifact 重放投影、运行目录、timeline、status、report、backup 和 ledger verify/rebuild。
 
 退出条件：
 
@@ -259,7 +252,7 @@ ikb export audit <task-id> [--redact]
 
 交付：Document Agent、写作 Skill 适配、事实/来源检查、草稿 diff、人工接受/修改记录和知识候选回写。
 
-退出条件：使用真实但可脱敏的技术方案连续跑通 10 次；每次都能解释引用了什么知识、产生了什么修改、为什么完成；不需要直接查数据库或运行目录才能定位失败。
+退出条件：使用真实但可脱敏的技术方案连续跑通 10 次；每次都能解释引用了什么知识、产生了什么修改、为什么完成；不需要直接翻原始事件文件或运行目录才能定位失败。
 
 随后进入两周 shadow 使用期，记录草稿接受率、人工修改幅度、缺失知识和错误引用。数据不达标时先修知识与契约，不急着增加工作流。
 
@@ -299,13 +292,13 @@ ikb export audit <task-id> [--redact]
 | 类别 | 必须证明的内容 |
 |---|---|
 | Contract | 非法状态转换、缺少来源、越权 Skill 和无效 Approval 被拒绝 |
-| Persistence | 老版本数据库能向前迁移，未知字段不会被静默丢弃 |
+| Persistence | 老版本事件格式能被读取，未知字段不会被静默丢弃 |
 | Recovery | 进程中断、步骤超时、重复命令和外部写入回包丢失后可恢复 |
 | Audit | Task 当前状态能关联到事件、Run、Artifact 和人工决定 |
 | Security | scope 隔离、日志脱敏、凭证引用和 Action Gateway 不能绕过 |
 | E2E | 至少一条真实纵向工作流从 Task 创建跑到知识回写 |
 
-数据库变更必须带迁移、旧夹具和回滚说明。状态机、权限、恢复语义和稳定数据契约发生变化时，创建 C 级 Plan Pack；普通文档和局部实现不增加额外流程负担。
+事件格式变更必须带版本、旧夹具和回滚说明。状态机、权限、恢复语义和稳定数据契约发生变化时，创建 C 级 Plan Pack；普通文档和局部实现不增加额外流程负担。
 
 ## v0.1 完成定义
 

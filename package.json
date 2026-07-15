@@ -1,0 +1,18 @@
+{
+  "name": "ikb",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal knowledge work operating system",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "bin": {
+    "ikb": "bin/ikb"
+  },
+  "scripts": {
+    "ikb": "node --no-warnings=ExperimentalWarning --experimental-strip-types src/cli.ts",
+    "test": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test",
+    "check": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test"
+  }
+}

@@ -4,7 +4,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 
 它把长期知识、任务执行和 Agent 能力连成一条闭环：记录事实与决策，围绕 Task 组装上下文，调用 Agent 与 Skill 完成工作，验证结果，再把有效经验写回知识库。
 
-当前阶段只做方案评审，不进入代码实现。
+当前已进入 v0.1 落地：先交付本地 CLI 和 JSONL 工作账本，知识检索、Harness 和工作流按路线图逐步接入。
 
 ## 方案入口
 
@@ -21,3 +21,15 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 - 默认只读和草稿模式；大象发送、CR 评论、push、状态修改等外部动作必须过人工门禁。
 - v0.1 先交付本地 CLI，不建设 Web 界面。任务、运行、审批和产物都能通过命令行查询、追踪和导出。
 - 项目对外只使用 ikb 自己的术语：`task / run / approval / artifact / plan`。普通改动使用 Task + 验收条件，高风险改动增加 Plan Pack 和人工批准。
+
+## 本地启动
+
+需要 Node 22.6 或更高版本。当前不依赖外部数据库服务：
+
+```bash
+./bin/ikb init
+./bin/ikb status
+./bin/ikb task add --type document --goal "写一份技术方案" --accept "事实都有来源"
+```
+
+工作账本默认落在 `~/.ikb/ledger/events.jsonl`，可以直接打开查看；Run 证据位于 `~/.ikb/runs/`。完整命令见[完整落地计划](docs/implementation-plan.md)。

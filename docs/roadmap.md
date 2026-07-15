@@ -12,7 +12,7 @@
 
 ### M1：本地工作账本
 
-实现 Task、Run、Approval、Artifact、不可变事件表和状态投影；提供 `list / show / timeline / follow / report` 等只读视图。CLI 是首版控制面，SQLite 是运行账本真相源。
+实现 Task、Run、Approval、Artifact、不可变 JSONL 事件账本和状态投影；提供 `list / show / timeline / follow / report` 等只读视图。CLI 是首版控制面，`events.jsonl` 是运行账本真相源，索引层后置。
 
 首批 CLI：
 

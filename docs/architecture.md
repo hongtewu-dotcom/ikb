@@ -140,12 +140,12 @@ ikb/                          # 公开代码、模板、脱敏示例
 | 数据 | 真相源 | 派生数据 |
 |---|---|---|
 | 长期知识 | Markdown + Git | FTS、Embedding、关系索引 |
-| Task / Run / Approval | SQLite 不可变事件账本 | 当前状态投影、统计报表 |
+| Task / Run / Approval | `events.jsonl` 不可变事件账本 | 内存状态投影、统计报表，后续可加可重建索引 |
 | 大型运行日志与附件 | 本地运行目录/对象存储 | change digest、检索摘要 |
 | Agent / Skill / Workflow | 版本化 manifest | UI 能力目录、运行计划 |
 | Token / Cookie / 密钥 | 系统密钥设施 | 知识库只保存引用名，不保存值 |
 
-SQLite 和向量索引都必须可删除重建。Markdown 不承担高频运行状态，避免 Obsidian 编辑和任务引擎相互覆盖。
+事件账本、查询索引和向量索引都必须可备份、可校验、可删除重建。Markdown 不承担高频运行状态，避免 Obsidian 编辑和任务引擎相互覆盖。
 
 ## 技术形态
 
