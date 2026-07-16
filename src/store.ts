@@ -265,6 +265,14 @@ export class LedgerStore {
     return event!;
   }
 
+  recordSourceEvent(sourceId: string, eventType: "source.ingested" | "source.context_built", payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("source", sourceId, eventType, payload, null);
+    });
+    return event!;
+  }
+
   verify(): { events: number; brokenChains: string[]; projections: Record<string, number> } {
     const events = this.listEvents();
     const brokenChains: string[] = [];

@@ -37,6 +37,8 @@ ikb doctor
 首批 CLI：
 
 ```text
+ikb source ingest
+ikb source list|show|context
 ikb capture
 ikb ingest
 ikb search

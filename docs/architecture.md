@@ -4,7 +4,7 @@
 
 个人知识库的价值不在“记了多少”，在“下一次工作能不能拿到正确上下文，并用结果修正原来的认知”。系统必须同时管知识和工作，但两者不能混成一个目录：知识描述什么长期成立，Task 描述当前要完成什么，Run 记录这次实际发生了什么。
 
-ikb 因此分成三个平面：Knowledge Plane 保存长期事实、决策、偏好和方法；Execution Plane 用 Agent、Skill 和 Harness 执行工作；Control Plane 管理 Task、Run、Approval 和 Artifact。第一版的控制面是本地 CLI，不依赖 Web 界面。
+ikb 因此分成四个平面：Source Plane 接住原始对话、文档和评论；Knowledge Plane 保存长期事实、决策、偏好和方法；Execution Plane 用 Agent、Skill 和 Harness 执行工作；Control Plane 管理 Task、Run、Approval 和 Artifact。第一版的控制面是本地 CLI，不依赖 Web 界面。
 
 ## 产品边界
 

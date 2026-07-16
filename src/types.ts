@@ -81,7 +81,8 @@ export interface StoreOptions {
 
 export type KnowledgeStatus = "draft" | "verified" | "retired";
 export type KnowledgeRelationType = "related" | "derived_from" | "contradicts";
-export type KnowledgeSourceKind = "elephant" | "ai_conversation" | "document" | "review_comment" | "artifact" | "manual" | string;
+export type SourceKind = "elephant" | "ai_conversation" | "document" | "review_comment" | "artifact" | "manual" | string;
+export type KnowledgeSourceKind = SourceKind;
 
 export interface KnowledgeRecord {
   id: string;
@@ -109,6 +110,39 @@ export interface KnowledgeRelationResult {
   reciprocal: boolean;
   source: KnowledgeRecord;
   target: KnowledgeRecord;
+}
+
+export interface SourceRecord {
+  id: string;
+  title: string;
+  kind: SourceKind;
+  scope: string;
+  sensitivity: string;
+  format: "jsonl" | "markdown";
+  originalPath: string;
+  rawPath: string;
+  recordsPath: string;
+  contentHash: string;
+  recordCount: number;
+  importedAt: string;
+}
+
+export interface SourceMessage {
+  id: string;
+  sourceId: string;
+  conversationId: string;
+  role: string;
+  actor: string;
+  timestamp: string;
+  content: string;
+  refs: string[];
+  participants: string[];
+}
+
+export interface SourceContext {
+  source: SourceRecord;
+  records: SourceMessage[];
+  markdown: string;
 }
 
 export interface KnowledgeSearchResult {

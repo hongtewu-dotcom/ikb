@@ -4,7 +4,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 
 它把长期知识、任务执行和 Agent 能力连成一条闭环：记录事实与决策，围绕 Task 组装上下文，调用 Agent 与 Skill 完成工作，验证结果，再把有效经验写回知识库。
 
-当前已进入 v0.1 落地：先交付本地 CLI 和 JSONL 工作账本，知识检索、Harness 和工作流按路线图逐步接入。
+当前已进入 v0.1 落地：本地 CLI、JSONL 工作账本、Source Slice 和 Agent-facing Skills 已可运行，真实连接器和完整 Harness 按路线图逐步接入。
 
 ## 方案入口
 
@@ -13,6 +13,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 - [执行与治理契约](docs/contracts.md)：Agent、Skill、Harness、状态、权限和产物契约。
 - [路线图与验收](docs/roadmap.md)：分阶段建设顺序、首批工作流和成功标准。
 - [完整落地计划](docs/implementation-plan.md)：CLI 优先的实施拆分、数据落盘、命令设计和阶段验收。
+- [本地 Source Slice 验收](docs/vertical-slice.md)：本轮已经落地的范围、命令和明确不做的部分。
 
 ## 当前判断
 
@@ -57,3 +58,11 @@ Obsidian 可以直接打开 `~/.ikb/vaults/personal` 或 `~/.ikb/vaults/work`。
 - `ikb-knowledge-curator`：生成 draft、维护 Obsidian 关系并执行准入门禁。
 
 Skill 是 Agent 的主入口，CLI 只提供确定性底座和审计/运维能力。当前直接可用的来源是文本、文件和 Markdown；大象与历史 Agent 会话适配器按 [Source Plane 设计](docs/source-plane.md) 逐步接入。
+
+本地 Source Slice：
+
+```bash
+./bin/ikb source ingest examples/source/agent-session.jsonl --kind ai_conversation --scope work
+./bin/ikb source ingest examples/source/review-comment.md --kind review_comment --scope work
+./bin/ikb source context <source-id> --limit 100
+```

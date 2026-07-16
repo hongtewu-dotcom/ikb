@@ -21,7 +21,7 @@ If the source is not available, state the missing adapter or export. Do not repl
 
 ## Evidence workflow
 
-1. Retrieve the smallest relevant set of messages, document versions, comments, and Run artifacts.
+1. Retrieve the smallest relevant set of messages, document versions, comments, and Run artifacts. For an imported Source, call `./bin/ikb source context <source-id> --limit <n>` and use the returned record IDs as citations.
 2. Preserve `source_id`, `conversation_id`, `message_id`, `document_id`, `revision_id`, URL/path, author, timestamp, and line/location references.
 3. Group related items into Episodes. Keep separate conversations separate unless a shared identifier or explicit evidence joins them.
 4. Label each statement as `fact`, `inference`, `hypothesis`, or `unknown`.

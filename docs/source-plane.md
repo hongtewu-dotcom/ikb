@@ -113,6 +113,16 @@ Source Plane 的原始数据和索引都属于本地私有数据，不进入公�
 
 ## CLI 与 Skill 边界
 
-CLI 只提供确定性底座和运维入口：初始化、扫描、状态、备份、诊断、时间线和导出。自然语言分析交给 Skill：Skill 负责选择范围、调用检索、组织上下文、生成报告和知识候选；固定的数据格式、准入门槛、权限和账本写入仍由 Core 执行。
+当前可运行的本地 Source Slice：
 
-当前 ikb 已实现文本/文件/Markdown 捕获和知识关系维护；大象、Claude Code、Desk、Codex 的具体适配器，以及文档版本/评论归一化，属于下一阶段 Source Plane 实现。
+```bash
+ikb source ingest session.jsonl --kind ai_conversation --scope work
+ikb source ingest design.md --kind document --scope work
+ikb source ingest review.md --kind review_comment --scope work
+ikb source list
+ikb source context <source-id> --limit 100
+```
+
+CLI 只提供确定性底座和运维入口：初始化、导入、状态、备份、诊断、时间线和 Context 导出。自然语言分析交给 Skill：Skill 负责选择范围、调用 Source Context、组织上下文、生成报告和知识候选；固定的数据格式、准入门槛、权限和账本写入仍由 Core 执行。
+
+当前 ikb 已实现本地 JSONL/Markdown Source 导入、原始快照、归一化记录、Context 导出、文本/文件知识捕获和知识关系维护。大象、Claude Code、Desk、Codex 的自动发现/增量适配器，以及文档版本/评论的细粒度归一化，属于下一阶段 Source Plane 实现。

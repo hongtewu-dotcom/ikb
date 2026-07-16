@@ -1,0 +1,3 @@
+{"session_id":"demo-session","turn_id":"1","role":"user","content":"评审验价方案，重点看价格来源和失败证据。","timestamp":"2026-07-16T09:00:00+08:00","files":["design.md"]}
+{"session_id":"demo-session","turn_id":"2","role":"assistant","content":"先确认方案是否保留供应商原始价格，再检查失败路径是否有可追溯证据。","timestamp":"2026-07-16T09:01:00+08:00","refs":["task-demo"]}
+{"session_id":"demo-session","turn_id":"3","role":"user","content":"把这个判断沉淀下来，后续 CR 复用。","timestamp":"2026-07-16T09:02:00+08:00"}

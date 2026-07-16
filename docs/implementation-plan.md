@@ -241,6 +241,8 @@ ikb report weekly [--format md|json]
 
 交付：Source registry、原始快照、消息/文档/评论归一化、增量游标、Markdown schema、capture/ingest、draft/verified/retired、冲突与过期检查、FTS5、统一 search、context pack、引用追踪和 Vault doctor。输入适配器覆盖本地文件、重要文档/评论和历史 Agent 会话；大象适配器保留权限与登录边界，单独验收。
 
+当前先验收本地 Source Slice：`ikb source ingest` 导入 JSONL/Markdown，保存 raw snapshot 和 normalized records，`ikb source context` 输出可供 Skill 使用的带引用上下文。
+
 退出条件：
 
 - 从脱敏文档生成 draft，来源与内容 hash 可追溯。

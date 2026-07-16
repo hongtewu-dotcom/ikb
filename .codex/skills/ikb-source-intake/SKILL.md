@@ -40,11 +40,13 @@ Deduplicate with stable source IDs first and content hashes second. Keep a dupli
 The current repository supports file/text capture:
 
 ```bash
+./bin/ikb source ingest <jsonl-or-markdown-file> --kind ai_conversation|document|review_comment --scope personal|work
+./bin/ikb source context <source-id> --limit 100
 ./bin/ikb ingest <markdown-file> --scope personal|work
 ./bin/ikb capture <file-or-text> --title "..." --scope personal|work
 ```
 
-Add source metadata through `--source` or the imported file path. Do not mark the result `verified` during intake. The Source registry and direct conversation adapters are being added on top of this substrate; until then, report the missing adapter instead of pretending a scan succeeded.
+For a JSONL Agent conversation, normalize one object per line with `session_id`/`conversation_id`, `turn_id`/`message_id`, `role`, `content`, optional timestamp, refs, files, and participants. For documents or review comments, ingest Markdown as one cited record. Add source metadata through `--source` or the imported file path. Do not mark the result `verified` during intake. The local Source registry and normalized records are available; direct Elephant and app-history adapters are not present yet. Until then, require an export or report the missing adapter instead of pretending a scan succeeded.
 
 ### 5. Return an intake report
 

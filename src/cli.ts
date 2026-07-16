@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { LedgerStore } from "./store.ts";
 import { assertValue, formatRows, printValue } from "./format.ts";
 import { buildContextPack, captureKnowledge, findKnowledge, ingestKnowledge, listKnowledge, relateKnowledge, reviewKnowledge, searchKnowledge, updateKnowledgeStatus } from "./knowledge.ts";
+import { buildSourceContext, findSource, importSource, listSources, readSourceRecords } from "./source.ts";
 import type { KnowledgeRelationType, OutputFormat } from "./types.ts";
 
 interface ParsedArgs {
@@ -23,6 +24,8 @@ Usage:
   ikb artifact add|list|show|open
   ikb capture <source-file|text> --title <title> [--scope personal|work] [--source-kind document|review_comment|manual]
   ikb ingest <markdown-file> [--scope personal|work] [--source-kind document|review_comment]
+  ikb source ingest <jsonl|markdown-file> --kind ai_conversation|document|review_comment [--scope personal|work]
+  ikb source list|show|context
   ikb search <query> [--scope personal|work]
   ikb context <task-id> [--run <run-id>]
   ikb review [--scope personal|work]
@@ -87,6 +90,9 @@ async function main(): Promise<void> {
         break;
       case "ingest":
         handleIngest(store, home, subcommand, parsed);
+        break;
+      case "source":
+        handleSource(store, home, subcommand, args, parsed);
         break;
       case "search":
         handleSearch(home, [subcommand, ...args].filter(Boolean).join(" "), parsed);
@@ -307,6 +313,48 @@ function handleIngest(store: LedgerStore, home: string, source: string | undefin
   printValue(record, outputFormat(parsed));
 }
 
+function handleSource(store: LedgerStore, home: string, action: string | undefined, args: string[], parsed: ParsedArgs): void {
+  switch (action) {
+    case "ingest": {
+      const kind = requiredOption(parsed, "kind");
+      assertValue(["elephant", "ai_conversation", "document", "review_comment", "artifact", "manual"].includes(kind), "--kind must be elephant, ai_conversation, document, review_comment, artifact, or manual");
+      const result = importSource(home, requiredArg(args, 0, "source file"), {
+        kind,
+        title: optionalOption(parsed, "title"),
+        scope: optionalOption(parsed, "scope"),
+        sensitivity: optionalOption(parsed, "sensitivity"),
+      });
+      store.recordSourceEvent(result.source.id, "source.ingested", sourceEventPayload(result.source));
+      printValue({ source: result.source, recordCount: result.records.length, recordIds: result.records.slice(0, 20).map((record) => record.id), truncated: result.records.length > 20 }, outputFormat(parsed));
+      break;
+    }
+    case "list":
+      printValue(listSources(home), outputFormat(parsed));
+      break;
+    case "show": {
+      const id = requiredArg(args, 0, "source id");
+      const source = findSource(home, id);
+      assertValue(source, `Source not found: ${id}`);
+      printValue({ source, records: readSourceRecords(home, id) }, outputFormat(parsed));
+      break;
+    }
+    case "context": {
+      const id = requiredArg(args, 0, "source id");
+      const context = buildSourceContext(home, id, optionalOption(parsed, "limit") ? Number(parsed.options.limit) : 100);
+      const runId = optionalOption(parsed, "run");
+      if (runId) {
+        const run = store.requireRun(runId);
+        writeFileSync(join(run.runDir, `source-${id}-context.md`), context.markdown);
+        store.recordSourceEvent(id, "source.context_built", { runId, records: context.records.length });
+      }
+      printValue(context, outputFormat(parsed));
+      break;
+    }
+    default:
+      throw new Error(`Unknown source action: ${action ?? ""}`);
+  }
+}
+
 function handleSearch(home: string, query: string, parsed: ParsedArgs): void {
   assertValue(query, "Usage: ikb search <query>");
   printValue(searchKnowledge(home, query, { scope: optionalOption(parsed, "scope"), status: optionalOption(parsed, "status"), limit: optionalOption(parsed, "limit") ? Number(parsed.options.limit) : undefined }), outputFormat(parsed));
@@ -405,6 +453,10 @@ function knowledgeEventPayload(record: { path: string; title: string; type: stri
   };
 }
 
+function sourceEventPayload(source: { title: string; kind: string; scope: string; sensitivity: string; format: string; originalPath: string; rawPath: string; recordsPath: string; contentHash: string; recordCount: number; importedAt: string }): Record<string, unknown> {
+  return { ...source };
+}
+
 function handleShow(store: LedgerStore, id: string, parsed: ParsedArgs): void {
   const task = store.getTask(id);
   if (task) {
@@ -439,13 +491,16 @@ function handleDoctor(store: LedgerStore, home: string, parsed: ParsedArgs): voi
   const verification = store.verify();
   const knownRunDirs = new Set(store.listRuns().map((run) => run.runDir));
   const actualRunDirs = existsSync(store.runsDir) ? readdirSync(store.runsDir).map((entry) => join(store.runsDir, entry)).filter((path) => statSync(path).isDirectory()) : [];
+  const sources = listSources(home);
   const result = {
     home,
     ledger: store.eventsPath,
     ...verification,
+    sources: sources.length,
+    missingSourceFiles: sources.filter((source) => !existsSync(source.rawPath) || !existsSync(source.recordsPath)).map((source) => source.id),
     missingRunDirs: store.listRuns().filter((run) => !existsSync(run.runDir)).map((run) => run.id),
     orphanRunDirs: actualRunDirs.filter((path) => !knownRunDirs.has(path)),
-    ok: verification.brokenChains.length === 0 && store.listRuns().every((run) => existsSync(run.runDir)),
+    ok: verification.brokenChains.length === 0 && store.listRuns().every((run) => existsSync(run.runDir)) && sources.every((source) => existsSync(source.rawPath) && existsSync(source.recordsPath)),
   };
   printValue(result, outputFormat(parsed));
   if (!result.ok) process.exitCode = 2;
