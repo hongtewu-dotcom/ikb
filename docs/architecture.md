@@ -52,6 +52,10 @@ flowchart LR
     P --> R
 ```
 
+### Source Plane
+
+Source Plane 接入大象聊天、Claude Code/Desk/Codex 历史会话、重要文档、CR/代码/文档评论和运行产物。原始材料先保留为带定位信息的证据，再归一化为消息、文档版本、评论和 Episode；写作过程、评论意见和修改理由与最终文档一样重要。Source Plane 不直接把原文当正式知识，分析结果先进入 draft，经过证据门禁后才进入 Knowledge Plane。具体记录契约见 [Source Plane 设计](source-plane.md)。
+
 ### Knowledge Plane
 
 Knowledge Plane 只保存未来会改变判断或行动的内容。原始日志、聊天全文和临时过程不会直接进入正式知识。

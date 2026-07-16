@@ -81,11 +81,13 @@ export interface StoreOptions {
 
 export type KnowledgeStatus = "draft" | "verified" | "retired";
 export type KnowledgeRelationType = "related" | "derived_from" | "contradicts";
+export type KnowledgeSourceKind = "elephant" | "ai_conversation" | "document" | "review_comment" | "artifact" | "manual" | string;
 
 export interface KnowledgeRecord {
   id: string;
   title: string;
   type: string;
+  sourceKind: KnowledgeSourceKind;
   scope: string;
   sensitivity: string;
   status: KnowledgeStatus;

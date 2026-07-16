@@ -6,6 +6,7 @@ import type { KnowledgeRecord, KnowledgeRelationResult, KnowledgeRelationType, K
 interface KnowledgeInput {
   title: string;
   type?: string;
+  sourceKind?: string;
   scope?: string;
   sensitivity?: string;
   status?: "draft" | "verified" | "retired";
@@ -31,6 +32,7 @@ export function captureKnowledge(home: string, input: KnowledgeInput): Knowledge
     id,
     title: input.title,
     type: input.type ?? "fact",
+    sourceKind: input.sourceKind ?? "manual",
     scope,
     sensitivity: input.sensitivity ?? (scope === "work" ? "work-internal" : "private"),
     status: input.status ?? "draft",
@@ -52,7 +54,7 @@ export function captureKnowledge(home: string, input: KnowledgeInput): Knowledge
   return record;
 }
 
-export function ingestKnowledge(home: string, source: string, options: { scope?: string; title?: string } = {}): KnowledgeRecord {
+export function ingestKnowledge(home: string, source: string, options: { scope?: string; title?: string; sourceKind?: string } = {}): KnowledgeRecord {
   const sourcePath = resolve(source);
   if (!existsSync(sourcePath) || !statSync(sourcePath).isFile()) throw new Error(`Knowledge source file not found: ${source}`);
   const text = readFileSync(sourcePath, "utf8");
@@ -60,6 +62,7 @@ export function ingestKnowledge(home: string, source: string, options: { scope?:
   return captureKnowledge(home, {
     title: options.title ?? parsed.title ?? basename(sourcePath, extname(sourcePath)),
     type: parsed.type,
+    sourceKind: options.sourceKind ?? parsed.sourceKind ?? "document",
     scope: options.scope ?? parsed.scope,
     sensitivity: parsed.sensitivity,
     sourceRefs: [...new Set([...(parsed.sourceRefs ?? []), sourcePath])],
@@ -183,6 +186,7 @@ function parseKnowledge(text: string, path: string): KnowledgeRecord {
     id: String(fields.id ?? `kb-file-${randomUUID().slice(0, 8)}`),
     title: String(fields.title ?? basename(path, extname(path))),
     type: String(fields.type ?? "fact"),
+    sourceKind: String(fields.source_kind ?? "manual"),
     scope: String(fields.scope ?? "personal"),
     sensitivity: String(fields.sensitivity ?? "private"),
     status: (fields.status === "verified" || fields.status === "retired" ? fields.status : "draft") as KnowledgeRecord["status"],
@@ -232,6 +236,7 @@ function renderKnowledge(record: KnowledgeRecord): string {
     "---",
     `id: ${record.id}`,
     `type: ${record.type}`,
+    `source_kind: ${record.sourceKind}`,
     `scope: ${record.scope}`,
     `sensitivity: ${record.sensitivity}`,
     `status: ${record.status}`,

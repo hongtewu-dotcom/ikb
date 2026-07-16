@@ -30,9 +30,9 @@ ikb doctor
 
 验收：创建和推进 Task 后能看到完整时间线；每次 Run 都能关联输入、日志、产物和 checkpoint；重启进程后状态不丢；所有当前状态都能从事件账本重建；从 M2 开始，ikb 自己的建设任务全部进入该账本。
 
-### M2：知识底座
+### M2：Source Plane 与知识底座
 
-实现 Markdown Vault、扁平 frontmatter、来源登记、候选准入、统一 search、引用追踪和 doctor。
+实现 Source registry、原始快照、消息/文档/评论归一化、增量扫描、Markdown Vault、扁平 frontmatter、候选准入、统一 search、引用追踪和 doctor。首批输入包含重要文档、版本差异、CR/文档评论，以及本地历史 Agent 会话。
 
 首批 CLI：
 
@@ -44,17 +44,17 @@ ikb context
 ikb review
 ```
 
-验收：可以从脱敏材料生成 draft 知识；verified 必须有证据；删除派生索引后能重建；personal/work 结果不会越界混用。
+验收：可以从脱敏材料生成 draft 知识；verified 必须有证据；文档草稿、版本差异和评论能回链到最终 Artifact；删除派生索引后能重建；personal/work 结果不会越界混用。
 
 ### M3：Harness 运行时
 
-实现 Agent/Skill manifest、context builder、固定步骤编排、质量检查、checkpoint、重试与 Action Gateway；先支持前台运行，再增加本地 daemon。
+实现 Agent/Skill manifest、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator`、context builder、固定步骤编排、质量检查、checkpoint、重试与 Action Gateway；先支持前台运行，再增加本地 daemon。Skill 作为 Agent 入口，CLI 只提供底层确定性能力。
 
 验收：可以给 Task 选择 Agent/Skill 并启动 Run；运行能停在 awaiting_approval；失败后从 checkpoint 恢复；未声明的 Skill 和未经批准的外部动作无法执行。
 
 ### M4：低风险工作流
 
-先接文档和沟通草稿。这两类工作能验证知识引用、写作偏好、人工门禁和结果回写，又不会修改代码或外部系统。
+先接重要文档、写作、CR/文档评论和沟通草稿。这些输入能验证知识引用、写作偏好、评论沉淀、人工门禁和结果回写，又不会修改代码或外部系统。
 
 验收：完成“创建 Task → 生成 context pack → 产出草稿 → 人工修改/接受 → 记录差异 → 形成知识候选”的闭环；连续真实使用两周后，统计接受率和主要修改原因。
 

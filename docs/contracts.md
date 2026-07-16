@@ -6,6 +6,12 @@
 
 ## 核心对象
 
+### Source
+
+Source 是外部材料的可追溯入口，不等同于 Knowledge。首批 source kind 为 `elephant`、`ai_conversation`、`document`、`review_comment`、`artifact` 和 `manual`。每条 Source 必须有稳定 `source_id`、scope、sensitivity、locator 和 snapshot hash；消息、文档版本、评论和运行产物必须保留原始定位。
+
+重要文档的草稿、版本差异、评审评论、处理理由和最终产物都属于输入。Agent 会话中的用户目标、工具调用、失败修正和最终验证同样属于输入。分析可以生成候选，但不能绕过证据引用和人工门禁直接晋升 verified。
+
 ### Knowledge
 
 ```yaml
@@ -74,6 +80,10 @@ Run 表示一次可重放的执行尝试，状态为 queued、running、awaiting
 | fallback | runtime 不可用或失败时的出口 |
 
 首批 Agent：Task Orchestrator、Knowledge Curator、Coding Agent、Review Agent、CR Agent、Document Agent、Communication Agent、Upward Management Agent。
+
+### Skill 使用契约
+
+Skill 是 Agent 面向 Source Plane 和 Knowledge Plane 的主要入口，CLI 只承担确定性底座和运维操作。Skill 输入至少声明 source kind、scope、时间范围、人物/主题、分析目的和副作用等级；输出至少包含报告、evidence refs、candidate knowledge、unknowns 和 next action。Skill 不直接修改 verified 知识，不绕过 ledger，不执行未声明的外部副作用。
 
 ### Skill Manifest
 

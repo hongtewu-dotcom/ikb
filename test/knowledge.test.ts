@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { captureKnowledge, buildContextPack, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
+import { captureKnowledge, buildContextPack, ingestKnowledge, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
 
 test("knowledge capture writes frontmatter and search returns source-scoped results", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-kb-test-"));
@@ -16,9 +16,20 @@ test("knowledge capture writes frontmatter and search returns source-scoped resu
   });
   const text = readFileSync(record.path, "utf8");
   assert.match(text, /status: draft/);
+  assert.match(text, /source_kind: manual/);
   assert.equal(searchKnowledge(home, "line reference", { scope: "personal" })[0].id, record.id);
   assert.equal(searchKnowledge(home, "line reference", { scope: "work" }).length, 0);
   assert.equal(reviewKnowledge(home, "personal").length, 1);
+});
+
+test("document ingest preserves source kind and source path", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-document-source-test-"));
+  const source = join(home, "review.md");
+  writeFileSync(source, "# Review\n\nKeep the evidence reference.\n");
+  const record = ingestKnowledge(home, source, { scope: "work", sourceKind: "review_comment" });
+  assert.equal(record.sourceKind, "review_comment");
+  assert.deepEqual(record.sourceRefs, [source]);
+  assert.match(readFileSync(record.path, "utf8"), /source_kind: review_comment/);
 });
 
 test("context pack only includes verified knowledge", () => {

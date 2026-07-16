@@ -9,6 +9,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 ## 方案入口
 
 - [产品与架构方案](docs/architecture.md)：系统解决什么问题，知识、执行和控制面如何分工。
+- [Source Plane 设计](docs/source-plane.md)：大象、Agent 会话、文档和评论如何进入 ikb。
 - [执行与治理契约](docs/contracts.md)：Agent、Skill、Harness、状态、权限和产物契约。
 - [路线图与验收](docs/roadmap.md)：分阶段建设顺序、首批工作流和成功标准。
 - [完整落地计划](docs/implementation-plan.md)：CLI 优先的实施拆分、数据落盘、命令设计和阶段验收。
@@ -46,3 +47,13 @@ Obsidian 可以直接打开 `~/.ikb/vaults/personal` 或 `~/.ikb/vaults/work`。
 ```
 
 个人与工作 Vault 默认不能互相建立链接；确实需要跨域时显式加 `--allow-cross-scope`。关系命令是幂等的，重复执行不会产生重复链接；有实际变更才写入 `knowledge.related` 事件。
+
+## Agent-facing Skills
+
+项目级 Skills 位于 `.codex/skills/`：
+
+- `ikb-source-intake`：接入大象、Agent 会话、重要文档、版本差异和评审评论；
+- `ikb-conversation-analysis`：分析对话、人物、文档论证和评论反馈；
+- `ikb-knowledge-curator`：生成 draft、维护 Obsidian 关系并执行准入门禁。
+
+Skill 是 Agent 的主入口，CLI 只提供确定性底座和审计/运维能力。当前直接可用的来源是文本、文件和 Markdown；大象与历史 Agent 会话适配器按 [Source Plane 设计](docs/source-plane.md) 逐步接入。

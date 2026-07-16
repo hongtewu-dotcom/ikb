@@ -2,7 +2,7 @@
 
 ## 结论
 
-v0.1 不依赖第三方任务平台，也不建设 Web 界面。先交付一个本地 CLI 控制面和不可变工作账本，再接知识检索、Agent/Skill Harness 和具体工作流。
+v0.1 不依赖第三方任务平台，也不建设 Web 界面。先交付一个本地 CLI 控制面和不可变工作账本，再接 Source Plane、知识检索和 Agent/Skill Harness。CLI 是底座，Agent 通过 Skill 使用分析能力。
 
 第一阶段必须做到四件事：
 
@@ -10,6 +10,8 @@ v0.1 不依赖第三方任务平台，也不建设 Web 界面。先交付一个�
 2. 每次执行有 Run，输入、上下文、步骤、失败和产物可追。
 3. 每个高风险动作有 Approval，批准了什么、谁批准、实际执行了什么可核对。
 4. 进程退出或机器重启后，状态能恢复，历史不会被新一次执行覆盖。
+
+Source Plane 另外保证：大象、Claude Code、Desk、Codex、重要文档、代码/文档评论和运行产物都能保留原始定位；写作草稿、版本差异、评论和最终文档都可以成为后续知识分析的输入。
 
 界面只是一种读取方式。CLI、未来的 TUI 和 Web 都消费同一应用服务、事件账本和查询模型。
 
@@ -79,6 +81,12 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
       verification.json          # 确定性检查与人工决定
       run-digest.md              # 面向复盘的短摘要
   reports/                       # 派生的日报、周报和审计导出
+  sources/
+    manifest.jsonl               # Source 注册与扫描游标
+    messages.jsonl                # 归一化消息与评论
+    episodes.jsonl                # 话题/对话片段
+    <source-id>/raw/              # 原始快照，不被分析结果覆盖
+  entities/people/               # 人物画像候选与证据引用
 
 ~/Knowledge/personal-vault/      # 个人知识，私有 Git 或本地备份
 ~/Knowledge/work-vault/          # 工作知识，公司允许的存储位置
@@ -114,6 +122,12 @@ action.executed
 artifact.created
 knowledge.referenced
 knowledge.candidate_created
+source.registered
+source.scan_started
+source.snapshot_created
+source.message_ingested
+source.episode_created
+analysis.completed
 ```
 
 每个事件保存对象内序号、操作者、时间、因果事件、关联 Task/Run、payload hash 和变更摘要。历史事件不能 update 或 delete；修正错误要追加补偿事件。
@@ -223,9 +237,9 @@ ikb report weekly [--format md|json]
 - 删除投影后能从事件重建相同状态。
 - 从 P3 开始，ikb 后续开发任务全部用本地账本管理。
 
-### P3：知识底座，5～8 天
+### P3：Source Plane 与知识底座，5～8 天
 
-交付：Markdown schema、source registry、capture/ingest、draft/verified/retired、冲突与过期检查、FTS5、统一 search、context pack、引用追踪和 Vault doctor。
+交付：Source registry、原始快照、消息/文档/评论归一化、增量游标、Markdown schema、capture/ingest、draft/verified/retired、冲突与过期检查、FTS5、统一 search、context pack、引用追踪和 Vault doctor。输入适配器覆盖本地文件、重要文档/评论和历史 Agent 会话；大象适配器保留权限与登录边界，单独验收。
 
 退出条件：
 
@@ -234,12 +248,13 @@ ikb report weekly [--format md|json]
 - personal/work scope 在检索和导出时不会串用。
 - 删除全文索引后可以从 Markdown 完整重建。
 - Agent 输出能声明实际使用了哪些知识、支持了哪个判断。
+- 文档草稿、版本差异和评审评论能关联到最终 Artifact，并能生成知识候选。
 
 不做全量搬家。现有 Memory、Obsidian 和文档只按真实任务需要逐步摄入，先形成高价值 verified 知识。
 
 ### P4：Harness 运行时，5～8 天
 
-交付：Agent/Skill manifest、runtime adapter、固定步骤状态机、context builder、质量检查、重试、checkpoint、前台 runner、本地 daemon 和 Action Gateway。
+交付：Agent/Skill manifest、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator` 三个 Agent-facing Skill、runtime adapter、固定步骤状态机、context builder、质量检查、重试、checkpoint、前台 runner、本地 daemon 和 Action Gateway。人物蒸馏先作为 conversation analysis 的一种模式，不单独复制 Source 逻辑。
 
 退出条件：
 
@@ -248,10 +263,11 @@ ikb report weekly [--format md|json]
 - 未在 manifest 声明的 Skill 无法调用。
 - L3 动作必须生成 Approval；payload 变化后旧批准失效。
 - Agent 更换模型或 runtime 后，输入输出契约保持不变。
+- Agent 可以直接调用 Skill 分析对话、文档和评论，不需要了解内部目录或调用一串 CLI。
 
 ### P5：技术方案纵向切片，3～5 天
 
-交付：Document Agent、写作 Skill 适配、事实/来源检查、草稿 diff、人工接受/修改记录和知识候选回写。
+交付：Document Agent、写作 Skill 适配、重要文档/评论输入、事实/来源检查、草稿 diff、人工接受/修改记录和知识候选回写。
 
 退出条件：使用真实但可脱敏的技术方案连续跑通 10 次；每次都能解释引用了什么知识、产生了什么修改、为什么完成；不需要直接翻原始事件文件或运行目录才能定位失败。
 

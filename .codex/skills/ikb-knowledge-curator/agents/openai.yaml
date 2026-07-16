@@ -1,0 +1,4 @@
+interface:
+  display_name: "IKB Knowledge Curator"
+  short_description: "Curate, link, and gate ikb knowledge candidates"
+  default_prompt: "Use $ikb-knowledge-curator to normalize, link, and gate knowledge candidates in ikb."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "IKB Conversation Analysis"
+  short_description: "Analyze conversations, documents, and review evidence"
+  default_prompt: "Use $ikb-conversation-analysis to analyze selected conversations, documents, or review comments with evidence."

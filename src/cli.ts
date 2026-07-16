@@ -21,8 +21,8 @@ Usage:
   ikb run start|list|show|follow|checkpoint|resume|retry|finish|succeed|fail|cancel
   ikb approval request|list|show|approve|reject
   ikb artifact add|list|show|open
-  ikb capture <source-file|text> --title <title> [--scope personal|work]
-  ikb ingest <markdown-file> [--scope personal|work]
+  ikb capture <source-file|text> --title <title> [--scope personal|work] [--source-kind document|review_comment|manual]
+  ikb ingest <markdown-file> [--scope personal|work] [--source-kind document|review_comment]
   ikb search <query> [--scope personal|work]
   ikb context <task-id> [--run <run-id>]
   ikb review [--scope personal|work]
@@ -291,6 +291,7 @@ function handleCapture(store: LedgerStore, home: string, source: string | undefi
     title: requiredOption(parsed, "title"),
     body,
     type: optionalOption(parsed, "type"),
+    sourceKind: optionalOption(parsed, "source-kind") ?? (fromFile ? "document" : "manual"),
     scope: optionalOption(parsed, "scope"),
     sensitivity: optionalOption(parsed, "sensitivity"),
     sourceRefs: fromFile ? [sourcePath] : optionalOption(parsed, "source") ? [String(parsed.options.source)] : [],
@@ -301,7 +302,7 @@ function handleCapture(store: LedgerStore, home: string, source: string | undefi
 }
 
 function handleIngest(store: LedgerStore, home: string, source: string | undefined, parsed: ParsedArgs): void {
-  const record = ingestKnowledge(home, requiredValue(source, "markdown source"), { scope: optionalOption(parsed, "scope"), title: optionalOption(parsed, "title") });
+  const record = ingestKnowledge(home, requiredValue(source, "markdown source"), { scope: optionalOption(parsed, "scope"), title: optionalOption(parsed, "title"), sourceKind: optionalOption(parsed, "source-kind") });
   store.recordKnowledgeEvent(record.id, "knowledge.created", knowledgeEventPayload(record));
   printValue(record, outputFormat(parsed));
 }
@@ -385,11 +386,12 @@ function retireKnowledge(store: LedgerStore, home: string, id: string) {
   return record;
 }
 
-function knowledgeEventPayload(record: { path: string; title: string; type: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[]; aliases: string[]; related: string[]; derivedFrom: string[]; contradicts: string[] }): Record<string, unknown> {
+function knowledgeEventPayload(record: { path: string; title: string; type: string; sourceKind: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[]; aliases: string[]; related: string[]; derivedFrom: string[]; contradicts: string[] }): Record<string, unknown> {
   return {
     path: record.path,
     title: record.title,
     type: record.type,
+    sourceKind: record.sourceKind,
     scope: record.scope,
     status: record.status,
     sourceRefs: record.sourceRefs,

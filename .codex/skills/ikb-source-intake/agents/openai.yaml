@@ -1,0 +1,4 @@
+interface:
+  display_name: "IKB Source Intake"
+  short_description: "Ingest chat, document, and review evidence"
+  default_prompt: "Use $ikb-source-intake to ingest a conversation, document, or review artifact into ikb with provenance."
