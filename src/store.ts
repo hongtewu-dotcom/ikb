@@ -257,7 +257,7 @@ export class LedgerStore {
     return this.requireArtifact(artifact.id);
   }
 
-  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.retired", payload: EventPayload): EventRecord {
+  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.retired" | "knowledge.related", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("knowledge", knowledgeId, eventType, payload, null);

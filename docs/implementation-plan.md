@@ -188,6 +188,7 @@ ikb ingest <markdown-file> [--scope work]
 ikb search "..." [--scope work]
 ikb context <task-id> [--run <run-id>]
 ikb knowledge list|show|verify|retire|review
+ikb knowledge relate <from-id> <to-id> --type related|derived_from|contradicts [--allow-cross-scope]
 ikb report daily [--format md|json]
 ikb report weekly [--format md|json]
 ```

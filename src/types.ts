@@ -80,6 +80,7 @@ export interface StoreOptions {
 }
 
 export type KnowledgeStatus = "draft" | "verified" | "retired";
+export type KnowledgeRelationType = "related" | "derived_from" | "contradicts";
 
 export interface KnowledgeRecord {
   id: string;
@@ -92,8 +93,20 @@ export interface KnowledgeRecord {
   validFrom: string;
   reviewAfter: string;
   tags: string[];
+  aliases: string[];
+  related: string[];
+  derivedFrom: string[];
+  contradicts: string[];
   path: string;
   body: string;
+}
+
+export interface KnowledgeRelationResult {
+  relationType: KnowledgeRelationType;
+  changed: boolean;
+  reciprocal: boolean;
+  source: KnowledgeRecord;
+  target: KnowledgeRecord;
 }
 
 export interface KnowledgeSearchResult {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
-import type { KnowledgeRecord, KnowledgeSearchResult } from "./types.ts";
+import type { KnowledgeRecord, KnowledgeRelationResult, KnowledgeRelationType, KnowledgeSearchResult } from "./types.ts";
 
 interface KnowledgeInput {
   title: string;
@@ -11,6 +11,10 @@ interface KnowledgeInput {
   status?: "draft" | "verified" | "retired";
   sourceRefs?: string[];
   tags?: string[];
+  aliases?: string[];
+  related?: string[];
+  derivedFrom?: string[];
+  contradicts?: string[];
   body: string;
 }
 
@@ -22,8 +26,9 @@ export function resolveVault(home: string, scope = "personal"): string {
 
 export function captureKnowledge(home: string, input: KnowledgeInput): KnowledgeRecord {
   const scope = input.scope ?? "personal";
+  const id = `kb-${randomUUID().slice(0, 12)}`;
   const record: KnowledgeRecord = {
-    id: `kb-${randomUUID().slice(0, 12)}`,
+    id,
     title: input.title,
     type: input.type ?? "fact",
     scope,
@@ -33,6 +38,10 @@ export function captureKnowledge(home: string, input: KnowledgeInput): Knowledge
     validFrom: today(),
     reviewAfter: addMonths(today(), 3),
     tags: input.tags ?? [],
+    aliases: [...new Set([id, ...(input.aliases ?? [])])],
+    related: asRelationIds(input.related),
+    derivedFrom: asRelationIds(input.derivedFrom),
+    contradicts: asRelationIds(input.contradicts),
     path: "",
     body: input.body.trim() + "\n",
   };
@@ -55,6 +64,10 @@ export function ingestKnowledge(home: string, source: string, options: { scope?:
     sensitivity: parsed.sensitivity,
     sourceRefs: [...new Set([...(parsed.sourceRefs ?? []), sourcePath])],
     tags: parsed.tags,
+    aliases: parsed.aliases.filter((alias) => alias !== parsed.id),
+    related: parsed.related,
+    derivedFrom: parsed.derivedFrom,
+    contradicts: parsed.contradicts,
     body: parsed.body || text,
   });
 }
@@ -104,6 +117,36 @@ export function findKnowledge(home: string, id: string): KnowledgeRecord | null 
   return listKnowledge(home).find((record) => record.id === id) ?? null;
 }
 
+export function relateKnowledge(
+  home: string,
+  sourceId: string,
+  targetId: string,
+  relationType: KnowledgeRelationType,
+  options: { allowCrossScope?: boolean } = {},
+): KnowledgeRelationResult {
+  if (sourceId === targetId) throw new Error("A knowledge entry cannot relate to itself");
+  const source = findKnowledge(home, sourceId);
+  const target = findKnowledge(home, targetId);
+  if (!source) throw new Error(`Knowledge not found: ${sourceId}`);
+  if (!target) throw new Error(`Knowledge not found: ${targetId}`);
+  if (!options.allowCrossScope && source.scope !== target.scope) {
+    throw new Error(`Cross-scope relation is blocked (${source.scope} -> ${target.scope}); add --allow-cross-scope to confirm`);
+  }
+
+  const reciprocal = relationType !== "derived_from";
+  const sourceResult = addKnowledgeRelation(source, relationType, target);
+  const targetResult = reciprocal
+    ? addKnowledgeRelation(target, relationType, source)
+    : { record: target, changed: false };
+  return {
+    relationType,
+    changed: sourceResult.changed || targetResult.changed,
+    reciprocal,
+    source: sourceResult.record,
+    target: targetResult.record,
+  };
+}
+
 export function updateKnowledgeStatus(home: string, id: string, status: "verified" | "retired"): KnowledgeRecord {
   const record = findKnowledge(home, id);
   if (!record) throw new Error(`Knowledge not found: ${id}`);
@@ -147,6 +190,10 @@ function parseKnowledge(text: string, path: string): KnowledgeRecord {
     validFrom: String(fields.valid_from ?? today()),
     reviewAfter: String(fields.review_after ?? addMonths(today(), 3)),
     tags: asStringArray(fields.tags),
+    aliases: asStringArray(fields.aliases),
+    related: asRelationIds(fields.related),
+    derivedFrom: asRelationIds(fields.derived_from),
+    contradicts: asRelationIds(fields.contradicts),
     path,
     body,
   };
@@ -154,15 +201,28 @@ function parseKnowledge(text: string, path: string): KnowledgeRecord {
 
 function parseFrontmatter(text: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
+  let arrayKey: string | null = null;
   for (const line of text.split("\n")) {
+    const item = line.match(/^\s+-\s*(.*)$/);
+    if (item && arrayKey) {
+      const current = Array.isArray(result[arrayKey]) ? result[arrayKey] as unknown[] : [];
+      current.push(unquote(item[1].trim()));
+      result[arrayKey] = current;
+      continue;
+    }
     const separator = line.indexOf(":");
     if (separator <= 0) continue;
     const key = line.slice(0, separator).trim();
     const raw = line.slice(separator + 1).trim();
+    arrayKey = raw === "" ? key : null;
+    if (raw === "") {
+      result[key] = [];
+      continue;
+    }
     if (raw.startsWith("[") || raw.startsWith("\"")) {
       try { result[key] = JSON.parse(raw); continue; } catch { /* keep scalar */ }
     }
-    result[key] = raw.replace(/^['"]|['"]$/g, "");
+    result[key] = unquote(raw);
   }
   return result;
 }
@@ -180,9 +240,83 @@ function renderKnowledge(record: KnowledgeRecord): string {
     `valid_from: ${record.validFrom}`,
     `review_after: ${record.reviewAfter}`,
     `tags: ${JSON.stringify(record.tags)}`,
+    `aliases: ${JSON.stringify(record.aliases.length > 0 ? record.aliases : [record.id])}`,
+    `related: ${JSON.stringify(record.related.map(relationLink))}`,
+    `derived_from: ${JSON.stringify(record.derivedFrom.map(relationLink))}`,
+    `contradicts: ${JSON.stringify(record.contradicts.map(relationLink))}`,
     "---",
     record.body,
   ].join("\n");
+}
+
+function addKnowledgeRelation(record: KnowledgeRecord, relationType: KnowledgeRelationType, target: KnowledgeRecord): { record: KnowledgeRecord; changed: boolean } {
+  const relationKey = relationField(relationType);
+  const existing = record[relationKey];
+  const aliasValues = record.aliases.includes(record.id) ? record.aliases : [record.id, ...record.aliases];
+  const original = readFileSync(record.path, "utf8");
+  let updated = setFrontmatterArray(original, "aliases", aliasValues);
+  if (!existing.includes(target.id)) {
+    const relationKeyName = relationFieldName(relationType);
+    const currentLinks = readFrontmatterArray(updated, relationKeyName);
+    const preservedLinks = currentLinks.length > 0 ? currentLinks : existing.map(relationLink);
+    updated = setFrontmatterArray(updated, relationKeyName, [...preservedLinks, relationLink(target.id, target.title)]);
+  }
+  if (updated !== original) writeFileSync(record.path, updated);
+  return { record: parseKnowledge(updated, record.path), changed: updated !== original };
+}
+
+function relationField(type: KnowledgeRelationType): "related" | "derivedFrom" | "contradicts" {
+  if (type === "derived_from") return "derivedFrom";
+  return type;
+}
+
+function relationFieldName(type: KnowledgeRelationType): string {
+  if (type === "derived_from") return "derived_from";
+  return type;
+}
+
+function relationLink(id: string, title?: string): string {
+  const display = title?.replaceAll("]", "").replaceAll("|", "/").trim();
+  return display ? `[[${id}|${display}]]` : `[[${id}]]`;
+}
+
+function asRelationIds(value: unknown): string[] {
+  return asStringArray(value).map((item) => {
+    const match = item.match(/^\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]$/);
+    return (match?.[1] ?? item).trim();
+  }).filter(Boolean);
+}
+
+function setFrontmatterArray(text: string, key: string, values: string[]): string {
+  const match = text.match(/^---\n([\s\S]*?)\n---([\s\S]*)$/);
+  const serialized = `${key}: ${JSON.stringify([...new Set(values)])}`;
+  if (!match) return `---\n${serialized}\n---\n${text}`;
+  const lines = match[1].split("\n");
+  const index = lines.findIndex((line) => new RegExp(`^${escapeRegExp(key)}\\s*:`).test(line));
+  if (index < 0) {
+    lines.push(serialized);
+  } else {
+    let end = index + 1;
+    while (end < lines.length && /^\s+-\s*/.test(lines[end])) end += 1;
+    lines.splice(index, end - index, serialized);
+  }
+  return `---\n${lines.join("\n")}\n---${match[2]}`;
+}
+
+function readFrontmatterArray(text: string, key: string): string[] {
+  const match = text.match(/^---\n([\s\S]*?)\n---[\s\S]*$/);
+  return match ? asStringArray(parseFrontmatter(match[1])[key]) : [];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function unquote(value: string): string {
+  if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 function makeSnippet(body: string, terms: string[]): string {

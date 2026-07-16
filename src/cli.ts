@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { LedgerStore } from "./store.ts";
 import { assertValue, formatRows, printValue } from "./format.ts";
-import { buildContextPack, captureKnowledge, findKnowledge, ingestKnowledge, listKnowledge, reviewKnowledge, searchKnowledge, updateKnowledgeStatus } from "./knowledge.ts";
-import type { OutputFormat } from "./types.ts";
+import { buildContextPack, captureKnowledge, findKnowledge, ingestKnowledge, listKnowledge, relateKnowledge, reviewKnowledge, searchKnowledge, updateKnowledgeStatus } from "./knowledge.ts";
+import type { KnowledgeRelationType, OutputFormat } from "./types.ts";
 
 interface ParsedArgs {
   positionals: string[];
@@ -26,7 +26,8 @@ Usage:
   ikb search <query> [--scope personal|work]
   ikb context <task-id> [--run <run-id>]
   ikb review [--scope personal|work]
-  ikb knowledge list|show|verify|retire|review
+  ikb knowledge list|show|verify|retire|review|relate
+  ikb knowledge relate <from-id> <to-id> --type related|derived_from|contradicts [--allow-cross-scope]
   ikb timeline <task-or-run-id>
   ikb doctor
   ikb backup
@@ -342,6 +343,31 @@ function handleKnowledge(store: LedgerStore, home: string, action: string | unde
     case "review":
       printValue(reviewKnowledge(home, optionalOption(parsed, "scope")), outputFormat(parsed));
       break;
+    case "relate": {
+      const relationType = requiredOption(parsed, "type");
+      assertValue(["related", "derived_from", "contradicts"].includes(relationType), "--type must be related, derived_from, or contradicts");
+      const result = relateKnowledge(
+        home,
+        requiredArg(args, 0, "source knowledge id"),
+        requiredArg(args, 1, "target knowledge id"),
+        relationType as KnowledgeRelationType,
+        { allowCrossScope: parsed.options["allow-cross-scope"] === true },
+      );
+      if (result.changed) {
+        const relationPayload = (sourceId: string, targetId: string) => ({
+          relationType: result.relationType,
+          sourceId,
+          targetId,
+          reciprocal: result.reciprocal,
+          sourcePath: result.source.path,
+          targetPath: result.target.path,
+        });
+        store.recordKnowledgeEvent(result.source.id, "knowledge.related", relationPayload(result.source.id, result.target.id));
+        if (result.reciprocal) store.recordKnowledgeEvent(result.target.id, "knowledge.related", relationPayload(result.target.id, result.source.id));
+      }
+      printValue(result, outputFormat(parsed));
+      break;
+    }
     default:
       throw new Error(`Unknown knowledge action: ${action ?? ""}`);
   }
@@ -359,8 +385,22 @@ function retireKnowledge(store: LedgerStore, home: string, id: string) {
   return record;
 }
 
-function knowledgeEventPayload(record: { path: string; title: string; type: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[] }): Record<string, unknown> {
-  return { path: record.path, title: record.title, type: record.type, scope: record.scope, status: record.status, sourceRefs: record.sourceRefs, validFrom: record.validFrom, reviewAfter: record.reviewAfter, tags: record.tags };
+function knowledgeEventPayload(record: { path: string; title: string; type: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[]; aliases: string[]; related: string[]; derivedFrom: string[]; contradicts: string[] }): Record<string, unknown> {
+  return {
+    path: record.path,
+    title: record.title,
+    type: record.type,
+    scope: record.scope,
+    status: record.status,
+    sourceRefs: record.sourceRefs,
+    validFrom: record.validFrom,
+    reviewAfter: record.reviewAfter,
+    tags: record.tags,
+    aliases: record.aliases,
+    related: record.related,
+    derivedFrom: record.derivedFrom,
+    contradicts: record.contradicts,
+  };
 }
 
 function handleShow(store: LedgerStore, id: string, parsed: ParsedArgs): void {

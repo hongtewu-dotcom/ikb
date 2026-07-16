@@ -21,9 +21,14 @@ valid_from: 2026-07-15
 review_after: 2026-10-15
 tags:
   - example
+aliases:
+  - kb-20260715-001
+related: []
+derived_from: []
+contradicts: []
 ```
 
-约束：verified 必须有可访问来源或明确的人工确认记录；变更结论时追加 revision，不覆盖历史；敏感等级只能保持或升高，自动流程不得降低。
+约束：verified 必须有可访问来源或明确的人工确认记录；变更结论时追加 revision，不覆盖历史；敏感等级只能保持或升高，自动流程不得降低。关系字段使用 Obsidian `[[knowledge-id]]`，`related` 与 `contradicts` 双向维护，`derived_from` 从新知识指向依据；跨 personal/work Vault 默认拒绝，必须显式确认。关系变更追加 `knowledge.related` 事件。
 
 ### Task
 
@@ -127,7 +132,7 @@ OUTER 每周读取运行摘要和已验证结果，不直接吞原始长日志�
 
 ### Event Ledger
 
-Task、Run、Approval 和 Artifact 的每次变更都先追加到本地 `events.jsonl`，再由读取方重放为当前状态投影。事件一经写入不可修改和删除。
+Task、Run、Approval、Artifact 和 Knowledge 的每次变更都先追加到本地 `events.jsonl`，再由读取方重放为当前状态投影。事件一经写入不可修改和删除。
 
 每条事件至少包含：`event_id`、对象类型与 ID、对象内递增序号、事件类型、操作者、时间、`causation_id`、变更摘要、payload hash、前一事件 hash 和当前事件 hash。状态、日报和周报都可以从事件重建；任何无法关联事件的状态修改都视为数据损坏。多进程写入通过账本锁串行化，索引数据库只能作为可删除的派生数据。
 

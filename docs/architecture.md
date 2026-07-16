@@ -71,6 +71,8 @@ Knowledge Plane 只保存未来会改变判断或行动的内容。原始日志�
 
 每条知识至少包含：稳定 ID、类型、工作/生活范围、敏感等级、来源引用、有效时间、复核时间和标签。frontmatter 使用扁平字段，正文存放判断、适用边界和证据。
 
+知识文件同时保留 Obsidian 关系字段：`related` 表示同主题知识，`derived_from` 表示本条结论的依据，`contradicts` 表示相互冲突的判断。ikb 写入 `[[knowledge-id]]` 并维护稳定 alias；`related` 和 `contradicts` 双向记录，`derived_from` 只从新结论指向依据，反向关系由 Obsidian backlink 提供。关系变更追加到事件账本，不通过覆盖旧内容制造“无痕修改”。
+
 ### Execution Plane
 
 Execution Plane 把一项工作表示成 Task，把一次尝试表示成 Run。Task 可以经历多次 Run；失败不会抹掉历史，新的 Run 从上一次的产物和反馈恢复。

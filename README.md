@@ -20,6 +20,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 - Task 控制面负责管理工作，Run 负责记录一次执行，知识库不承载运行状态。
 - 默认只读和草稿模式；大象发送、CR 评论、push、状态修改等外部动作必须过人工门禁。
 - v0.1 先交付本地 CLI，不建设 Web 界面。任务、运行、审批和产物都能通过命令行查询、追踪和导出。
+- 知识条目使用 Obsidian 兼容的 Markdown + YAML frontmatter；`related`、`derived_from`、`contradicts` 使用 `[[wikilink]]`，关系变更也进入事件账本。
 - 项目对外只使用 ikb 自己的术语：`task / run / approval / artifact / plan`。普通改动使用 Task + 验收条件，高风险改动增加 Plan Pack 和人工批准。
 
 ## 本地启动
@@ -33,3 +34,15 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 ```
 
 工作账本默认落在 `~/.ikb/ledger/events.jsonl`，可以直接打开查看；Run 证据位于 `~/.ikb/runs/`。完整命令见[完整落地计划](docs/implementation-plan.md)。
+
+## Obsidian 知识关系
+
+Obsidian 可以直接打开 `~/.ikb/vaults/personal` 或 `~/.ikb/vaults/work`。ikb 为每条知识写入稳定 ID 和 alias，关系字段保持为可点击的 `[[knowledge-id]]`；`related` 和 `contradicts` 自动双向维护，`derived_from` 保持从新知识指向依据的单向关系。
+
+```bash
+./bin/ikb knowledge relate <from-id> <to-id> --type related
+./bin/ikb knowledge relate <from-id> <to-id> --type derived_from
+./bin/ikb knowledge relate <from-id> <to-id> --type contradicts
+```
+
+个人与工作 Vault 默认不能互相建立链接；确实需要跨域时显式加 `--allow-cross-scope`。关系命令是幂等的，重复执行不会产生重复链接；有实际变更才写入 `knowledge.related` 事件。
