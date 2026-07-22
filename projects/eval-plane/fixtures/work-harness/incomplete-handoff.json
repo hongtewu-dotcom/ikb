@@ -1,0 +1,1 @@
+{"subjectVersion":"fixture-work-v1","nodes":[],"plan":{"parallel_waves":[]},"events":[{"type":"handoff","fromRole":"researcher","outputRefs":[]}],"summary":{},"budget":{"max_retries":1}}

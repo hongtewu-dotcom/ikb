@@ -1,0 +1,4 @@
+interface:
+  display_name: "Work Orchestrator"
+  short_description: "跨 Codex 与 Claude Code 的轻量任务编排与子 Agent 上下文交接"
+  default_prompt: "使用 $work-orchestrator 按任务复杂度拆分工作，复用当前 Codex 或 Claude Code 的原生子 Agent，并执行上下文交接与验收"

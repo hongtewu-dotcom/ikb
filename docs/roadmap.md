@@ -44,15 +44,16 @@ ikb ingest
 ikb search
 ikb context
 ikb review
+ikb knowledge rebuild|migrate
 ```
 
-验收：可以从脱敏材料生成 draft 知识；verified 必须有证据；文档草稿、版本差异和评论能回链到最终 Artifact；删除派生索引后能重建；personal/work 结果不会越界混用。
+验收：可以从本地有权限的材料或合成材料生成 draft 知识；verified 必须有证据；文档草稿、版本差异和评论能回链到最终 Artifact；Vault 按 collection 浏览，生成的 index 不进入知识检索；旧 `entries/` 可读且只显式迁移；删除派生索引后能重建；personal/work 结果不会越界混用。
 
 ### M3：Harness 运行时
 
-实现 Agent/Skill manifest、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator`、context builder、固定步骤编排、质量检查、checkpoint、重试与 Action Gateway；先支持前台运行，再增加本地 daemon。Skill 作为 Agent 入口，CLI 只提供底层确定性能力。
+实现六个角色的 Agent/Skill manifest（`ikb-harness`、`ikb-intake`、`ikb-analyst`、`ikb-curator`、`ikb-operator`、`ikb-verifier`）、G0～G6 门禁、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator`、context builder、固定步骤编排、质量检查、checkpoint、重试与 Action Gateway；先支持前台运行，再增加本地 daemon。`ikb-harness` 同时承担执行编排、单次 Run 复盘和跨 Task 改进三个模式；编码、评审、CR、文档和沟通作为 `ikb-operator` 的 Skill，不复制 Agent 状态。当前已补齐 `harness-events.v1` 事件契约、12 个确定性评估 Case 和 `harness-eval.v1` 评估结果记录；真正自动调度仍按后续 Task 落地。
 
-验收：可以给 Task 选择 Agent/Skill 并启动 Run；运行能停在 awaiting_approval；失败后从 checkpoint 恢复；未声明的 Skill 和未经批准的外部动作无法执行。
+验收：可以给 Task 选择角色/Skill 并启动 Run；运行能停在 awaiting_approval；失败后从 checkpoint 恢复；未声明的 Skill 和未经批准的外部动作无法执行；Harness 能基于 Run/Artifact/Approval 生成单次复盘和改进候选，但不能自动修改角色、Skill、门禁或权限。
 
 ### M4：低风险工作流
 
@@ -62,7 +63,7 @@ ikb review
 
 ### M5：编码、评审与 CR
 
-接入 Git worktree、代码搜索、GitNexus、构建测试和 reviewer；实现编码、评审和 CR 三个 Agent。
+接入 Git worktree、代码搜索、GitNexus、构建测试和 reviewer；实现 `ikb-operator` 的编码、评审和 CR 三个 Skill。
 
 验收：编码 Run 有隔离工作区、测试和 diff；评审结论带文件/行号与证据；CR 外部评论和 push 无法绕过人工批准；失败 Run 可以从 checkpoint 恢复。
 
@@ -72,17 +73,17 @@ ikb review
 
 验收：凭证不落知识库；连接器权限与可访问数据范围可审计；外部写入幂等；失败可重试且不会重复发送。
 
-### M7：终端界面与 Web 控制面
+### M7：终端界面与可写 Web 控制面
 
-在 CLI 命令和状态契约稳定后增加 `ikb tui`；Web 控制面最后建设，只调用同一应用服务和查询模型。
+当前先使用 `ikb report serve` 的本地只读 HTML 观测页；在 CLI 命令和状态契约稳定后增加 `ikb tui`，可写 Web 控制面最后建设，只调用同一应用服务和查询模型。
 
 验收：TUI/Web 显示结果与 CLI 一致；任何写操作都会生成相同事件；删除界面层不影响任务执行和数据恢复。
 
 ### M8：Harness 进化
 
-实现周度 OUTER LOOP、经验语料、决策预测验证和规则补丁队列。
+实现 `ikb-harness` 的周度 OUTER LOOP、经验语料、决策预测验证、重复失败/知识缺口/Skill 低效/门禁误阻断分析和规则补丁队列。当前已实现只读失败聚类与 `pending_review` 改进候选；自动入池、人工确认和回归应用仍保持显式步骤。
 
-验收：改进建议能追溯到真实 Run；补丁应用前有审批和回滚；同类失败第二次出现时能命中已验证修法；无效果的规则会被识别而不是继续堆叠。
+验收：改进建议能追溯到真实 Run、Artifact 和 Approval；补丁应用前有 Plan Pack、审批和回滚；同类失败第二次出现时能命中已验证修法；无效果的规则会被识别而不是继续堆叠；Harness 不直接自我修改稳定契约。
 
 ## 推荐的第一条纵向切片
 
@@ -94,8 +95,9 @@ ikb review
 创建 document Task
   → 填目标、读者和验收
   → 检索相关知识与写作偏好
-  → Document Agent 生成方案
+  → `ikb-operator` 调用 `document` Skill 生成方案
   → fact/source check
+  → `ikb-verifier` 验收
   → CLI 展示草稿与引用
   → 用户修改或接受
   → 记录差异和结果

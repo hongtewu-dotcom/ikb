@@ -2,7 +2,7 @@
 
 ## 结论
 
-v0.1 不依赖第三方任务平台，也不建设 Web 界面。先交付一个本地 CLI 控制面和不可变工作账本，再接 Source Plane、知识检索和 Agent/Skill Harness。CLI 是底座，Agent 通过 Skill 使用分析能力。
+v0.1 不依赖第三方任务平台，也不建设可写的 Web 控制面。先交付一个本地 CLI 控制面和不可变工作账本，同时提供只读 HTML 观测页，再接 Source Plane、知识检索和 Agent/Skill Harness。CLI 是底座，Agent 通过 Skill 使用分析能力。
 
 第一阶段必须做到四件事：
 
@@ -15,6 +15,19 @@ Source Plane 另外保证：大象、Claude Code、Desk、Codex、重要文档�
 
 界面只是一种读取方式。CLI、未来的 TUI 和 Web 都消费同一应用服务、事件账本和查询模型。
 
+## 当前角色框架状态
+
+六个角色已经登记为稳定 manifest，并有中文显示名、`ikb-*` ID、允许 Task 类型、Skill 白名单和 G0～G6 门禁绑定。当前真实落地边界如下：
+
+- `ikb-intake` 的 Source 接入和存证链路已真实跑通；
+- `ikb-curator` 的 Obsidian draft、来源、关系、verify 和 rebuild 已可用，但仍以手工触发为主；
+- `ikb-harness` 的 Task/Run/Approval/Artifact 控制面、角色查询和 Run 启动校验已可用；
+- INNER/MID/OUTER 的 Loop 数据契约已登记，并可通过 `ikb loop list|show` 查看必需输入、输出、证据来源和实现状态；
+- `ikb-analyst`、`ikb-operator`、`ikb-verifier` 的角色契约和 Skill 入口已登记，自动节点交接、独立 verifier Run 和跨 Task 模式发现尚未完成；
+- `ikb-harness` 的复盘/优化属于正式职责，但必须等 Harness runtime 读取 Run 摘要、门禁结果和 Artifact 后才会自动产出候选改进。
+
+因此，v0.1 可以手工串起“采集 → 分析 → 策展 → 执行 → 验收”，不能把角色 manifest 误认为完整的多节点自动编排。
+
 ## v0.1 的交付边界
 
 v0.1 完成“写技术方案”这一条纵向闭环：
@@ -24,10 +37,11 @@ v0.1 完成“写技术方案”这一条纵向闭环：
   → 检查目标与验收
   → 检索个人/工作知识
   → 生成 context pack
-  → Document Agent 产出草稿
+  → `ikb-operator` 调用 `document` Skill 产出草稿
   → 事实与来源检查
   → 用户接受或修改
   → 保存 Artifact 与差异
+  → `ikb-verifier` 验收
   → 生成候选知识
   → Task 完成
 ```
@@ -57,14 +71,14 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
 - 知识真相源：Markdown + Git。FTS、Embedding 和关系索引都是可删除的派生数据；SQLite 只有在查询规模和并发确实需要时才作为索引层引入。
 - 运行证据：每个 Run 一个独立目录，关闭后只追加补充记录，不覆盖原始输入和事件。
 - 测试：单元测试、契约测试、迁移测试、崩溃恢复测试和纵向 E2E。
-- 界面：先普通 CLI；命令稳定后再增加 TUI；Web 最后建设。
+- 界面：CLI 是写入口；当前已有只读 HTML 观测页；TUI 和可写 Web 控制面仍在后续阶段。
 
 先用 FTS5、字段过滤和链接关系完成检索。只有真实任务证明召回不足时才增加 Embedding，不在冷启动阶段建设向量基础设施。
 
 ## 数据落盘
 
 ```text
-~/.ikb/
+ikb/ikb-data/                     # 项目内运行数据，已加入 .gitignore
   config.yaml                    # Vault、运行时和安全策略配置
   ledger/
     events.jsonl                 # 不可变事件真相源
@@ -81,18 +95,39 @@ v0.1 不做：浏览器看板、移动端、多人协作、通用向量平台、
       verification.json          # 确定性检查与人工决定
       run-digest.md              # 面向复盘的短摘要
   reports/                       # 派生的日报、周报和审计导出
+  entities/
+    people/key-people.json       # 关键人物 MIS/UID/显示名目录，本地私有
   sources/
-    manifest.jsonl               # Source 注册与扫描游标
-    messages.jsonl                # 归一化消息与评论
-    episodes.jsonl                # 话题/对话片段
-    <source-id>/raw/              # 原始快照，不被分析结果覆盖
-  entities/people/               # 人物画像候选与证据引用
-
-~/Knowledge/personal-vault/      # 个人知识，私有 Git 或本地备份
-~/Knowledge/work-vault/          # 工作知识，公司允许的存储位置
+    manifest.jsonl               # Source 注册与扫描游标（后续聚合索引）
+    messages.jsonl                # 归一化消息与评论（后续聚合索引）
+    episodes.jsonl                # 话题/对话片段（后续分段索引）
+    <source-id>/
+      source.json                # 来源、范围、hash 和归一化参数
+      raw/                       # 原始快照，不被分析结果覆盖
+      records.jsonl              # 标准化记录
+  vaults/
+    personal/                    # 个人 Obsidian Vault
+    work/                        # 工作 Obsidian Vault，公司相关且不可提交
+      index.md                   # 自动生成入口
+      domains/                   # 领域与职责边界
+      projects/                  # 项目与目标
+      people/                    # 人物相关事实与沟通偏好
+      concepts/                  # 概念、事实和默认兜底
+      decisions/                 # 决策及其依据
+      playbooks/                 # 可复用流程
+      lessons/                   # 复盘、风险和坑
+      syntheses/                 # 跨来源综合结论
+  governance/
+    personal|work/
+      gaps/                      # 已知知识缺口
+      conflicts/                 # 待处理冲突
+      reviews/                   # 复核记录
+      status.md                  # 自动生成状态视图
 ```
 
-公开的 `ikb` 仓库只放代码、schema、模板、测试夹具和脱敏示例。真实 Task、Run 和知识不提交到公开仓库。
+`personal` 和 `work` 都创建相同的八个 collection。每个 collection 含自动生成的 `index.md`；索引和 governance 视图不是知识记录。旧 `vaults/<scope>/entries/` 只作为兼容读取目录，初始化不会搬动；显式迁移必须先检查目标冲突，再追加 `knowledge.migrated` 事件。
+
+公开的 `ikb` 仓库只放代码、schema、模板、测试夹具和合成示例。真实 Task、Run 和知识放在项目 `ikb-data/`，该目录默认忽略；公司相关知识不得通过 `git add -f`、解除忽略或其他方式上传到 GitHub。
 
 ## 工作账本设计
 
@@ -122,8 +157,11 @@ action.executed
 artifact.created
 knowledge.referenced
 knowledge.candidate_created
+knowledge.migrated
 source.registered
 source.scan_started
+source.history_scan
+source.incremental_scan
 source.snapshot_created
 source.message_ingested
 source.episode_created
@@ -197,11 +235,12 @@ ikb artifact show <artifact-id>
 ### Knowledge 与报表
 
 ```text
-ikb capture <source-file|text> --title "..."
-ikb ingest <markdown-file> [--scope work]
+ikb capture <source-file|text> --title "..." [--collection <name>] [--admission-reason <why> --applicability <when> --boundary <limits>]
+ikb ingest <markdown-file> [--scope work] [--collection <name>] [--admission-reason <why> --applicability <when> --boundary <limits>]
 ikb search "..." [--scope work]
 ikb context <task-id> [--run <run-id>]
-ikb knowledge list|show|verify|retire|review
+ikb knowledge list|show|verify|retire|review|lint|skip|rebuild|migrate
+ikb knowledge skip --title "..." --reason "..." --source-id <source-id>
 ikb knowledge relate <from-id> <to-id> --type related|derived_from|contradicts [--allow-cross-scope]
 ikb report daily [--format md|json]
 ikb report weekly [--format md|json]
@@ -221,7 +260,7 @@ ikb report weekly [--format md|json]
 
 ### P1：工程骨架，1～2 天
 
-交付：pnpm workspace、CLI 入口、配置加载、运行时 schema、事件格式版本、测试框架、脱敏 demo Vault 和 CI。
+交付：pnpm workspace、CLI 入口、配置加载、运行时 schema、事件格式版本、测试框架、合成 demo Vault 和 CI。
 
 退出条件：全新目录执行 `ikb init` 后能生成配置与数据目录；重复执行不破坏已有数据；`ikb doctor` 能报告基础环境状态。
 
@@ -239,45 +278,51 @@ ikb report weekly [--format md|json]
 
 ### P3：Source Plane 与知识底座，5～8 天
 
-交付：Source registry、原始快照、消息/文档/评论归一化、增量游标、Markdown schema、capture/ingest、draft/verified/retired、冲突与过期检查、FTS5、统一 search、context pack、引用追踪和 Vault doctor。输入适配器覆盖本地文件、重要文档/评论和历史 Agent 会话；大象适配器保留权限与登录边界，单独验收。
+交付：Source registry、原始快照、消息/文档/评论归一化、统一增量状态与游标、Markdown schema、capture/ingest、draft/verified/retired、冲突与过期检查、FTS5、统一 search、context pack、引用追踪和 Vault doctor。当前已接入本地文件、Claude Code、Codex、Desk 历史会话、指定目录的 Elephant 批准导出、有界 `dx` CDP 历史读取，以及 Citadel 文档/划词/全文评论读取、`searchContent` 搜索和输入候选池；文件/Agent/CatPaw/学城/大象 Source 默认按稳定记录做增量并保留状态账本。大象网页 DOM 断点续读、无目标全量扫描和外部写回仍单独验收。
 
 当前先验收本地 Source Slice：`ikb source ingest` 导入 JSONL/Markdown，保存 raw snapshot 和 normalized records，`ikb source context` 输出可供 Skill 使用的带引用上下文。
 
-退出条件：
+退出条件（对应 G0～G3）：
 
-- 从脱敏文档生成 draft，来源与内容 hash 可追溯。
+- 从本地有权限的文档或合成材料生成 draft，来源与内容 hash 可追溯。
+- 每个已分析来源允许产出零条 Knowledge；无长期价值时记录 rejected Candidate 和理由，不创建空泛摘要。
+- 来源型 Knowledge 缺少准入理由、适用范围、边界或来源时，在写文件前被拒绝；手工改坏的文件会被 lint/doctor 报告。
 - verified 知识没有来源时无法写入。
 - personal/work scope 在检索和导出时不会串用。
 - 删除全文索引后可以从 Markdown 完整重建。
+- 根/collection `index.md` 不会进入知识检索；旧 `entries/` 仍可读，只有显式迁移才移动。
 - Agent 输出能声明实际使用了哪些知识、支持了哪个判断。
 - 文档草稿、版本差异和评审评论能关联到最终 Artifact，并能生成知识候选。
+- Source、分析候选和 Knowledge draft 都能输出明确的 gate 状态；未通过 G0～G3 时只能停留在 blocked、review 或 draft。
 
 不做全量搬家。现有 Memory、Obsidian 和文档只按真实任务需要逐步摄入，先形成高价值 verified 知识。
 
 ### P4：Harness 运行时，5～8 天
 
-交付：Agent/Skill manifest、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator` 三个 Agent-facing Skill、runtime adapter、固定步骤状态机、context builder、质量检查、重试、checkpoint、前台 runner、本地 daemon 和 Action Gateway。人物蒸馏先作为 conversation analysis 的一种模式，不单独复制 Source 逻辑。
+交付：六个角色的 Agent manifest（`ikb-harness`、`ikb-intake`、`ikb-analyst`、`ikb-curator`、`ikb-operator`、`ikb-verifier`）、INNER/MID/OUTER Loop 数据契约、`ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator` 三个 Agent-facing Skill、runtime adapter、固定步骤状态机、context builder、G0～G6 gate evaluator、质量检查、重试、checkpoint、前台 runner、本地 daemon 和 Action Gateway。`ikb-harness` 同时提供执行编排、单次 Run 复盘和跨 Task 改进三个模式；编码、评审、CR、文档和沟通属于 `ikb-operator` 的 Skill，不复制 Agent 状态。人物蒸馏先作为 conversation analysis 的一种模式，不单独复制 Source 逻辑。
 
-退出条件：
+退出条件（对应 G4～G6）：
 
 - 同一个 Task 可以有多个 Run，失败历史不会被覆盖。
 - Run 能从最近 checkpoint 恢复，不重复执行已确认的副作用。
 - 未在 manifest 声明的 Skill 无法调用。
+- 角色只能写入 manifest 声明的对象和状态；`ikb-intake` 不能写 verified Knowledge，`ikb-operator` 不能直接写外部系统，`ikb-verifier` 不能替执行者修改产物。
+- Context Pack、Task acceptance、Artifact 和 verifier 结论缺失时，`run succeed` / `task done` 会被 gate evaluator 阻断。
 - L3 动作必须生成 Approval；payload 变化后旧批准失效。
 - Agent 更换模型或 runtime 后，输入输出契约保持不变。
 - Agent 可以直接调用 Skill 分析对话、文档和评论，不需要了解内部目录或调用一串 CLI。
 
 ### P5：技术方案纵向切片，3～5 天
 
-交付：Document Agent、写作 Skill 适配、重要文档/评论输入、事实/来源检查、草稿 diff、人工接受/修改记录和知识候选回写。
+交付：`ikb-operator` 的 `document` Skill 适配、`ikb-verifier` 验收节点、重要文档/评论输入、事实/来源检查、草稿 diff、人工接受/修改记录和知识候选回写。
 
-退出条件：使用真实但可脱敏的技术方案连续跑通 10 次；每次都能解释引用了什么知识、产生了什么修改、为什么完成；不需要直接翻原始事件文件或运行目录才能定位失败。
+退出条件：使用有权限的真实技术方案或合成方案连续跑通 10 次；每次都能解释引用了什么知识、产生了什么修改、为什么完成；不需要直接翻原始事件文件或运行目录才能定位失败。
 
 随后进入两周 shadow 使用期，记录草稿接受率、人工修改幅度、缺失知识和错误引用。数据不达标时先修知识与契约，不急着增加工作流。
 
 ### P6：编码、评审与 CR，1～2 周
 
-交付：Git/worktree、GitNexus、构建测试、diff 报告、行级审查证据，以及 Coding/Review/CR Agent。
+交付：Git/worktree、GitNexus、构建测试、diff 报告、行级审查证据，以及 `ikb-operator` 下的 `coding`、`review`、`cr` Skill。
 
 退出条件：
 
@@ -288,7 +333,7 @@ ikb report weekly [--format md|json]
 
 ### P7：沟通、向上管理和外部连接器，逐个接入
 
-先做只生成草稿，再逐个增加学城、ONES、大象、日历等连接器。每个连接器独立交付，不打包开放权限。
+先由 `ikb-operator` 只生成沟通和向上管理草稿，再逐个增加学城、ONES、大象、日历等连接器。每个连接器独立交付，不打包开放权限；真正发送仍由 Approval 保护。
 
 退出条件：凭证不写入知识或日志；外部写入有幂等键、Approval、结果回读和失败重试；同一个动作不会重复发送。
 
@@ -300,9 +345,9 @@ ikb report weekly [--format md|json]
 
 ### P9：OUTER LOOP，真实数据积累后再做
 
-交付：周度运行摘要、失败聚类、知识缺口、Skill 成功率、决策预测验证和候选补丁队列。
+交付：由 `ikb-harness` 复盘模式生成的周度运行摘要、单次 Run 复盘、失败聚类、知识缺口、Skill 成功率、门禁误阻断分析、可复用新模式、决策预测验证和候选补丁队列。
 
-退出条件：每个改进建议能追溯到真实 Run；高影响补丁进入 Plan Pack 和 Approval；相同失败再次发生时能命中已验证修法；无效果规则可以被撤回。
+退出条件：每个改进建议能追溯到真实 Run/Artifact/Approval；高影响补丁进入 Plan Pack 和 Approval；相同失败再次发生时能命中已验证修法；无效果规则可以被撤回；Harness 不能直接修改角色、Skill、门禁或权限。
 
 ## 质量与恢复门槛
 

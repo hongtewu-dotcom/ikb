@@ -1,0 +1,1 @@
+{"subjectVersion":"fixture-work-v1","nodes":[],"plan":{"parallel_waves":[]},"events":[{"type":"retry"},{"type":"retry"},{"type":"retry"}],"summary":{"retry_rounds":3},"budget":{"max_retries":2}}

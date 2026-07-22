@@ -1,0 +1,1 @@
+{"subjectVersion":"fixture-work-v1","nodes":[{"id":"node-1","goal":"inspect","acceptance":["handoff exists"],"post_conditions":["handoff exists"]}],"plan":{"parallel_waves":[["node-1"]]},"events":[],"summary":{},"budget":{"max_retries":1}}

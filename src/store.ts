@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -14,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Approval, Artifact, EventRecord, Run, StoreOptions, Task } from "./types.ts";
+import { normalizeHarnessEvent, type HarnessEventType } from "../projects/eval-plane/src/harness-events.ts";
 
 type Row = Record<string, any>;
 type EventPayload = Record<string, unknown>;
@@ -50,9 +52,12 @@ export class LedgerStore {
     this.runsDir = join(this.home, "runs");
     this.lockPath = join(this.ledgerDir, "events.lock");
     this.actor = options.actor ?? process.env.IKB_ACTOR ?? "human";
-    mkdirSync(this.ledgerDir, { recursive: true });
-    mkdirSync(this.runsDir, { recursive: true });
-    if (!existsSync(this.eventsPath)) writeFileSync(this.eventsPath, "");
+    mkdirSync(this.ledgerDir, { recursive: true, mode: 0o700 });
+    mkdirSync(this.runsDir, { recursive: true, mode: 0o700 });
+    chmodSync(this.ledgerDir, 0o700);
+    chmodSync(this.runsDir, 0o700);
+    if (!existsSync(this.eventsPath)) writeFileSync(this.eventsPath, "", { mode: 0o600 });
+    chmodSync(this.eventsPath, 0o600);
     this.reload();
   }
 
@@ -140,9 +145,10 @@ export class LedgerStore {
       failureReason: null,
       runDir: join(this.runsDir, makeRunDirName(taskId, runId)),
     };
-    mkdirSync(run.runDir, { recursive: true });
-    writeFileSync(join(run.runDir, "input.json"), `${JSON.stringify({ task, run }, null, 2)}\n`);
-    writeFileSync(join(run.runDir, "plan.json"), `${JSON.stringify({ status: "planned", steps: [] }, null, 2)}\n`);
+    mkdirSync(run.runDir, { recursive: true, mode: 0o700 });
+    chmodSync(run.runDir, 0o700);
+    writeFileSync(join(run.runDir, "input.json"), `${JSON.stringify({ task, run }, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(join(run.runDir, "plan.json"), `${JSON.stringify({ status: "planned", steps: [] }, null, 2)}\n`, { mode: 0o600 });
     this.transact(() => {
       if (task.status === "open") this.appendEventInternal("task", taskId, "task.started", { status: "active", updatedAt: timestamp }, null);
       this.appendEventInternal("run", runId, "run.queued", runPayload(run), null);
@@ -183,6 +189,25 @@ export class LedgerStore {
     return this.requireRun(runId);
   }
 
+  /**
+   * Append a typed Harness event to the Run aggregate.
+   *
+   * The normalizer is intentionally strict: a Run may expose references and
+   * hashes to observers, but never prompts, model output, local paths or raw
+   * tool payloads.  The ledger remains the source of truth; projections such
+   * as local reports consume these events after the fact.
+   */
+  recordHarnessEvent(runId: string, eventType: HarnessEventType, payload: unknown): EventRecord {
+    this.requireRun(runId);
+    const normalized = normalizeHarnessEvent(eventType, payload) as EventPayload;
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("run", runId, eventType, normalized, null);
+    });
+    this.writeRunSnapshot(runId);
+    return event!;
+  }
+
   resumeRun(runId: string): Run {
     const run = this.requireRun(runId);
     if (!["awaiting_approval", "failed", "queued"].includes(run.status)) {
@@ -203,13 +228,14 @@ export class LedgerStore {
 
   requestApproval(input: { runId: string; action: string; target: string; payload?: unknown; risk?: string }): Approval {
     const run = this.requireRun(input.runId);
+    const actionPayload = normalizeJsonValue(input.payload ?? {});
     const approval: Approval = {
       id: makeId("approval"),
       taskId: run.taskId,
       runId: run.id,
       action: input.action,
       target: input.target,
-      payloadHash: sha256(stableStringify(input.payload ?? {})),
+      payloadHash: sha256(stableStringify(actionPayload)),
       risk: input.risk ?? "high",
       status: "pending",
       requestedAt: now(),
@@ -217,7 +243,7 @@ export class LedgerStore {
       decisionNote: null,
     };
     this.transact(() => {
-      this.appendEventInternal("approval", approval.id, "approval.requested", { ...approval, payload: input.payload ?? {} }, null);
+      this.appendEventInternal("approval", approval.id, "approval.requested", { ...approval, payload: actionPayload }, null);
       this.appendEventInternal("run", run.id, "run.awaiting_approval", { status: "awaiting_approval", approvalId: approval.id }, approval.id);
     });
     this.writeRunSnapshot(run.id);
@@ -257,7 +283,7 @@ export class LedgerStore {
     return this.requireArtifact(artifact.id);
   }
 
-  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.retired" | "knowledge.related", payload: EventPayload): EventRecord {
+  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.retired" | "knowledge.archived" | "knowledge.related" | "knowledge.migrated" | "knowledge.referenced" | "knowledge.feedback_recorded", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("knowledge", knowledgeId, eventType, payload, null);
@@ -265,12 +291,71 @@ export class LedgerStore {
     return event!;
   }
 
-  recordSourceEvent(sourceId: string, eventType: "source.ingested" | "source.context_built", payload: EventPayload): EventRecord {
+  recordKnowledgeMigrationEvents(items: Array<{ id: string; payload: EventPayload }>): EventRecord[] {
+    const recorded: EventRecord[] = [];
+    this.transact(() => {
+      for (const item of items) {
+        const events = [...this.events, ...(this.pendingEvents ?? [])];
+        const exists = events.some((event) => event.eventType === "knowledge.migrated"
+          && event.aggregateId === item.id
+          && event.payload.from === item.payload.from
+          && event.payload.to === item.payload.to);
+        if (!exists) recorded.push(this.appendEventInternal("knowledge", item.id, "knowledge.migrated", item.payload, null));
+      }
+    });
+    return recorded;
+  }
+
+  recordSourceEvent(sourceId: string, eventType: "source.ingested" | "source.context_built" | "source.history_scan" | "source.citadel_search" | "source.citadel_read_started" | "source.candidate_discovery" | "source.incremental_scan", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("source", sourceId, eventType, payload, null);
     });
     return event!;
+  }
+
+  recordCandidateEvent(candidateId: string, eventType: "candidate.discovered" | "candidate.queued" | "candidate.resolve_started" | "candidate.ingested" | "candidate.rejected" | "candidate.blocked" | "candidate.updated", payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("candidate", candidateId, eventType, payload, null);
+    });
+    return event!;
+  }
+
+  recordExperienceEvent(experienceId: string, eventType: "experience.queued" | "experience.updated" | "experience.candidate_created" | "experience.candidate_updated", payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("experience", experienceId, eventType, payload, null);
+    });
+    return event!;
+  }
+
+  recordReasoningEvent(reasoningId: string, eventType: "reasoning.generated", payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("reasoning", reasoningId, eventType, payload, null);
+    });
+    return event!;
+  }
+
+  recordPersonEvent(personId: string, eventType: "person.added" | "person.updated" | "person.removed" | "person.view_built", payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("person", personId, eventType, payload, null);
+    });
+    return event!;
+  }
+
+  recordSourceIngestEvents(items: Array<{ id: string; payload: EventPayload }>): EventRecord[] {
+    const recorded: EventRecord[] = [];
+    this.transact(() => {
+      for (const item of items) {
+        const events = [...this.events, ...(this.pendingEvents ?? [])];
+        const exists = events.some((event) => event.aggregateType === "source" && event.aggregateId === item.id && event.eventType === "source.ingested");
+        if (!exists) recorded.push(this.appendEventInternal("source", item.id, "source.ingested", item.payload, null));
+      }
+    });
+    return recorded;
   }
 
   verify(): { events: number; brokenChains: string[]; projections: Record<string, number> } {
@@ -408,19 +493,20 @@ export class LedgerStore {
   private writeRunSnapshot(runId: string, terminalPayload?: EventPayload): void {
     const run = this.requireRun(runId);
     const runEvents = this.listEvents().filter((event) => event.aggregateType === "run" && event.aggregateId === runId);
-    writeFileSync(join(run.runDir, "events.jsonl"), `${runEvents.map((event) => JSON.stringify(event)).join("\n")}\n`);
+    writeFileSync(join(run.runDir, "events.jsonl"), `${runEvents.map((event) => JSON.stringify(event)).join("\n")}\n`, { mode: 0o600 });
     const verification = {
       status: terminalPayload?.status ?? run.status,
       summary: terminalPayload?.summary ?? null,
       updatedAt: now(),
     };
-    writeFileSync(join(run.runDir, "verification.json"), `${JSON.stringify(verification, null, 2)}\n`);
-    writeFileSync(join(run.runDir, "run-digest.md"), `# ${run.id}\n\n- Task: ${run.taskId}\n- Status: ${verification.status}\n- Summary: ${verification.summary ?? ""}\n`);
+    writeFileSync(join(run.runDir, "verification.json"), `${JSON.stringify(verification, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(join(run.runDir, "run-digest.md"), `# ${run.id}\n\n- Task: ${run.taskId}\n- Status: ${verification.status}\n- Summary: ${verification.summary ?? ""}\n`, { mode: 0o600 });
   }
 
   private appendEventInternal(aggregateType: string, aggregateId: string, eventType: string, payload: EventPayload, causationId: string | null): EventRecord {
     const allEvents = [...this.events, ...(this.pendingEvents ?? [])];
     const previous = [...allEvents].reverse().find((event) => event.aggregateType === aggregateType && event.aggregateId === aggregateId);
+    const normalizedPayload = normalizeJsonValue(payload) as EventPayload;
     const event: EventRecord = {
       eventId: makeId("event"),
       aggregateType,
@@ -430,8 +516,8 @@ export class LedgerStore {
       actor: this.actor,
       occurredAt: now(),
       causationId,
-      payload,
-      payloadHash: sha256(stableStringify(payload)),
+      payload: normalizedPayload,
+      payloadHash: sha256(stableStringify(normalizedPayload)),
       previousHash: previous?.eventHash ?? null,
       eventHash: "",
     };
@@ -547,10 +633,11 @@ function appendEvents(path: string, events: EventRecord[]): void {
 }
 
 function acquireLock(path: string): () => void {
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      const handle = openSync(path, "wx");
+      const handle = openSync(path, "wx", 0o600);
       writeFileSync(handle, `${JSON.stringify({ pid: process.pid, createdAt: now() })}\n`);
       closeSync(handle);
       return () => { try { unlinkSync(path); } catch { /* another process recovered a stale lock */ } };
@@ -593,6 +680,10 @@ function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`).join(",")}}`;
+}
+
+function normalizeJsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function hashEvent(event: EventRecord): string {

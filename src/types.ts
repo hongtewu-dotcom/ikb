@@ -83,11 +83,15 @@ export type KnowledgeStatus = "draft" | "verified" | "retired";
 export type KnowledgeRelationType = "related" | "derived_from" | "contradicts";
 export type SourceKind = "elephant" | "ai_conversation" | "document" | "review_comment" | "artifact" | "manual" | string;
 export type KnowledgeSourceKind = SourceKind;
+export type KnowledgeConfidence = "low" | "medium" | "high";
+export type KnowledgeTemporalState = "current" | "planned" | "historical" | "mixed" | "superseded" | "unknown";
+export type KnowledgeVerification = "unverified" | "source_confirmed" | "task_validated" | "user_confirmed";
 
 export interface KnowledgeRecord {
   id: string;
   title: string;
   type: string;
+  collection: string;
   sourceKind: KnowledgeSourceKind;
   scope: string;
   sensitivity: string;
@@ -100,6 +104,26 @@ export interface KnowledgeRecord {
   related: string[];
   derivedFrom: string[];
   contradicts: string[];
+  qualityVersion: number;
+  admissionReason: string;
+  applicability: string;
+  boundary: string;
+  /** A task-facing contract: when and how an Agent can use this card. */
+  useWhen?: string;
+  useInputs?: string[];
+  useOutputs?: string[];
+  useSteps?: string[];
+  useChecks?: string[];
+  useStopConditions?: string[];
+  /** Evidence strength, not a probability and not the same as lifecycle status. */
+  confidence?: KnowledgeConfidence;
+  confidenceBasis?: string[];
+  temporalState?: KnowledgeTemporalState;
+  verification?: KnowledgeVerification;
+  /** Person-only split: identity attribution and recurring pattern are not one score. */
+  identityConfidence?: KnowledgeConfidence;
+  patternConfidence?: KnowledgeConfidence;
+  independentEpisodeCount?: number;
   path: string;
   body: string;
 }
@@ -116,6 +140,8 @@ export interface SourceRecord {
   id: string;
   title: string;
   kind: SourceKind;
+  adapter?: string;
+  includeTools?: boolean;
   scope: string;
   sensitivity: string;
   format: "jsonl" | "markdown";
@@ -123,6 +149,7 @@ export interface SourceRecord {
   rawPath: string;
   recordsPath: string;
   contentHash: string;
+  recordsHash?: string;
   recordCount: number;
   importedAt: string;
 }
@@ -145,13 +172,62 @@ export interface SourceContext {
   markdown: string;
 }
 
+export type CandidateKind = "citadel_document" | "knowledge" | "person" | "external" | "pattern";
+export type CandidateStatus = "discovered" | "queued" | "ingested" | "rejected" | "blocked";
+
+export interface CandidateLocator {
+  adapter: string;
+  contentId?: string;
+  url?: string;
+  query?: string;
+}
+
+export interface CandidateOrigin {
+  sourceIds: string[];
+  recordIds: string[];
+  searchId?: string;
+  searchSnapshotPath?: string;
+  searchSnapshotHash?: string;
+}
+
+export interface CandidateResolution {
+  sourceIds: string[];
+  commentSourceId?: string;
+  ingestedAt: string;
+}
+
+export interface Candidate {
+  id: string;
+  fingerprint: string;
+  kind: CandidateKind;
+  status: CandidateStatus;
+  title: string;
+  scope: "personal" | "work";
+  sensitivity: string;
+  locator: CandidateLocator;
+  origin: CandidateOrigin;
+  resolution: CandidateResolution | null;
+  nextAction: string | null;
+  reason: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface KnowledgeSearchResult {
   id: string;
   title: string;
   type: string;
+  collection: string;
   scope: string;
   status: KnowledgeStatus;
   path: string;
   score: number;
   snippet: string;
+  useWhen?: string;
+  useInputs?: string[];
+  useOutputs?: string[];
+  useSteps?: string[];
+  useChecks?: string[];
+  useStopConditions?: string[];
 }

@@ -1,5 +1,23 @@
 node_modules/
-.ikb/
+# Work Harness runtime state and local interpreter caches are reproducible.
+.agent-work/
+__pycache__/
+*.py[cod]
+# Project-local ikb runtime data. This includes raw sources, ledger events,
+# runs and personal/work knowledge; do not force-add it to the public repo.
+ikb-data/
+# Local review material may quote work sources and named-person observations.
+/docs/待确认知识-评审清单.md
+/docs/业务知识输出规范.md
+# Defense in depth if IKB_HOME is pointed at the repository root.
+/vaults/
+/governance/
+/reports/
+/sources/
+/ledger/
+/runs/
+/backups/
+/entities/people/
 coverage/
 dist/
 *.log

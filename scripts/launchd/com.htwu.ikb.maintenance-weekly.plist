@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.htwu.ikb.maintenance-weekly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/htwu/projects/ikb/scripts/ikb-maintenance.mjs</string>
+    <string>weekly</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/htwu/projects/ikb</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>IKB_PROJECT_ROOT</key>
+    <string>/Users/htwu/projects/ikb</string>
+    <key>IKB_HOME</key>
+    <string>/Users/htwu/projects/ikb/ikb-data</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/htwu/projects/ikb/ikb-data/maintenance/launchd-weekly.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/htwu/projects/ikb/ikb-data/maintenance/launchd-weekly.error.log</string>
+</dict>
+</plist>
