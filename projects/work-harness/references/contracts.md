@@ -56,6 +56,8 @@ node --no-warnings=ExperimentalWarning --experimental-strip-types <script> --tas
 
 verify stdout 在原终态投影中增加 `evaluation`。成功时只投影 evaluator 返回的 `work-harness-evaluation-v1` 元数据；跳过或失败时投影 `status`、`suiteId` 和稳定 `reason`。主 `events.jsonl` 对应追加 `evaluation.trigger_completed`、`evaluation.trigger_skipped` 或 `evaluation.trigger_failed`，事件不保存完整报告和 evaluator stderr。
 
+触发器会把 evaluator 输出的 `runId` 与当前 `task.json.run_id` 对账，并要求 `reportRef=artifact://evaluation/work-run-quality/<evaluationKey>`、`reportPath=<task-dir>/evaluations/work-run-quality/<evaluationKey>.json` 且目标为普通文件。身份不一致按 `invalid_output` 处理，不能驱动质量放行。
+
 退出码约定：正常完成或显式跳过返回 0；超时、非零退出、输出非法或启动失败返回 2；verification verdict 为 pass 但 `hardGatePassed=false` 时返回 3。返回 2 或 3 都不回写已经落盘的 terminal status；verdict 为 fail 时，质量评估 blocked 不额外改变退出码。
 
 ## Plan node

@@ -737,7 +737,7 @@ def evaluation_script() -> Tuple[Path | None, str | None]:
     return script, None
 
 
-def evaluation_output_errors(value: Any) -> List[str]:
+def evaluation_output_errors(value: Any, task_dir: Path, expected_run_id: str) -> List[str]:
     if not isinstance(value, dict):
         return ["evaluation output must be an object"]
     errors: List[str] = []
@@ -756,6 +756,21 @@ def evaluation_output_errors(value: Any) -> List[str]:
         errors.append("evaluation result must be pass, partial or blocked")
     if not isinstance(value.get("reused"), bool):
         errors.append("evaluation reused must be a boolean")
+    if value.get("runId") != expected_run_id:
+        errors.append("evaluation runId must match task.json")
+    evaluation_key = value.get("evaluationKey")
+    if isinstance(evaluation_key, str) and ID_PATTERN.fullmatch(evaluation_key):
+        expected_ref = f"artifact://evaluation/{EVALUATION_SUITE_ID}/{evaluation_key}"
+        if value.get("reportRef") != expected_ref:
+            errors.append("evaluation reportRef must match suiteId and evaluationKey")
+        expected_path = (task_dir.resolve() / "evaluations" / EVALUATION_SUITE_ID / f"{evaluation_key}.json").resolve()
+        report_path = value.get("reportPath")
+        if not isinstance(report_path, str) or Path(report_path).expanduser().resolve() != expected_path:
+            errors.append("evaluation reportPath must match the current task directory and evaluationKey")
+        elif not expected_path.is_file() or expected_path.is_symlink():
+            errors.append("evaluation reportPath must be a regular report file")
+    else:
+        errors.append("evaluation evaluationKey must be a safe identifier")
     return errors
 
 
@@ -797,7 +812,8 @@ def trigger_work_evaluation(task_dir: Path) -> Dict[str, Any]:
         output = json.loads(completed.stdout)
     except (json.JSONDecodeError, TypeError):
         return evaluation_trigger_result("failed", "invalid_output")
-    if evaluation_output_errors(output):
+    task = read_json(task_dir / "task.json")
+    if evaluation_output_errors(output, task_dir, str(task.get("run_id", ""))):
         return evaluation_trigger_result("failed", "invalid_output")
     return {field: output[field] for field in EVALUATION_RESULT_FIELDS}
 

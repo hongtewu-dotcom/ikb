@@ -87,6 +87,14 @@ def fake_evaluator_env(tmp: str, stdout: str, returncode: int = 0, stderr: str =
         encoding="utf-8",
     )
     node.chmod(0o755)
+    try:
+        output = json.loads(stdout)
+        report_path = output.get("reportPath") if isinstance(output, dict) else None
+        if isinstance(report_path, str) and report_path:
+            Path(report_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(report_path).write_text("{}\n", encoding="utf-8")
+    except json.JSONDecodeError:
+        pass
     args_path = root / "fake-node-args.json"
     return {
         "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
@@ -154,12 +162,12 @@ def test_verify_triggers_evaluator_and_projects_completed_result():
             "schema": "work-harness-evaluation-v1",
             "status": "completed",
             "suiteId": "work-run-quality",
-            "runId": "evaluation-run-1",
+            "runId": "run-evaluation-completed",
             "evaluationKey": "evaluation-key-1",
             "hardGatePassed": True,
             "result": "pass",
-            "reportRef": "evaluation://evaluation-key-1",
-            "reportPath": str(task_dir / "evaluations" / "evaluation-key-1.json"),
+            "reportRef": "artifact://evaluation/work-run-quality/evaluation-key-1",
+            "reportPath": str(task_dir / "evaluations" / "work-run-quality" / "evaluation-key-1.json"),
             "reused": False,
         }
         env, evaluator, args_path = fake_evaluator_env(tmp, json.dumps(evaluation))
@@ -243,20 +251,20 @@ def test_verify_returns_two_and_records_evaluator_failure():
 
 def test_verify_quality_blocked_only_gates_passing_verdict():
     with tempfile.TemporaryDirectory() as tmp:
-        evaluation = {
+        passing_task = prepare_task_for_verify(tmp, "quality-pass")
+        passing_evaluation = {
             "schema": "work-harness-evaluation-v1",
             "status": "completed",
             "suiteId": "work-run-quality",
-            "runId": "evaluation-run-blocked",
-            "evaluationKey": "evaluation-key-blocked",
+            "runId": "run-quality-pass",
+            "evaluationKey": "evaluation-key-pass-blocked",
             "hardGatePassed": False,
             "result": "blocked",
-            "reportRef": "evaluation://evaluation-key-blocked",
-            "reportPath": str(Path(tmp) / "evaluation-key-blocked.json"),
+            "reportRef": "artifact://evaluation/work-run-quality/evaluation-key-pass-blocked",
+            "reportPath": str(passing_task / "evaluations" / "work-run-quality" / "evaluation-key-pass-blocked.json"),
             "reused": False,
         }
-        env, _, _ = fake_evaluator_env(tmp, json.dumps(evaluation))
-        passing_task = prepare_task_for_verify(tmp, "quality-pass")
+        env, _, _ = fake_evaluator_env(tmp, json.dumps(passing_evaluation))
 
         result = run("verify", str(passing_task), "--verdict", "pass", cwd=tmp, env=env)
 
@@ -267,9 +275,42 @@ def test_verify_quality_blocked_only_gates_passing_verdict():
         assert any(event["event"] == "evaluation.trigger_completed" for event in read_events(passing_task))
 
         failing_task = prepare_task_for_verify(tmp, "quality-fail", verdict="fail")
+        failing_evaluation = {
+            **passing_evaluation,
+            "runId": "run-quality-fail",
+            "evaluationKey": "evaluation-key-fail-blocked",
+            "reportRef": "artifact://evaluation/work-run-quality/evaluation-key-fail-blocked",
+            "reportPath": str(failing_task / "evaluations" / "work-run-quality" / "evaluation-key-fail-blocked.json"),
+        }
+        env, _, _ = fake_evaluator_env(tmp, json.dumps(failing_evaluation))
         result = run("verify", str(failing_task), "--verdict", "fail", cwd=tmp, env=env)
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads((failing_task / "run-state.json").read_text(encoding="utf-8"))["status"] == "blocked"
+
+
+def test_verify_rejects_evaluator_identity_mismatch():
+    with tempfile.TemporaryDirectory() as tmp:
+        task_dir = prepare_task_for_verify(tmp, "evaluation-identity")
+        evaluation = {
+            "schema": "work-harness-evaluation-v1",
+            "status": "completed",
+            "suiteId": "work-run-quality",
+            "runId": "run-other-task",
+            "evaluationKey": "evaluation-key-identity",
+            "hardGatePassed": True,
+            "result": "pass",
+            "reportRef": "artifact://evaluation/work-run-quality/evaluation-key-identity",
+            "reportPath": str(task_dir / "evaluations" / "work-run-quality" / "evaluation-key-identity.json"),
+            "reused": False,
+        }
+        env, _, _ = fake_evaluator_env(tmp, json.dumps(evaluation))
+
+        result = run("verify", str(task_dir), "--verdict", "pass", cwd=tmp, env=env)
+
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert json.loads(result.stdout)["evaluation"]["reason"] == "invalid_output"
+        assert any(event["event"] == "evaluation.trigger_failed" for event in read_events(task_dir))
+        assert json.loads((task_dir / "run-state.json").read_text(encoding="utf-8"))["status"] == "completed"
 
 
 def test_summary_is_required_and_checked_at_verification():
@@ -419,6 +460,7 @@ if __name__ == "__main__":
     test_verify_records_explicit_evaluation_skip()
     test_verify_returns_two_and_records_evaluator_failure()
     test_verify_quality_blocked_only_gates_passing_verdict()
+    test_verify_rejects_evaluator_identity_mismatch()
     test_summary_is_required_and_checked_at_verification()
     test_summary_rejects_missing_signal_evidence()
     test_long_task_id_gets_a_safe_default_run_id()
