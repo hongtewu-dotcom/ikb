@@ -49,9 +49,26 @@ verification: unverified
 
 `confidence` 表示证据强度，不是概率，也不等于 `status`：`low` 允许作为带边界的探索性 draft，`medium` 表示来源支持但仍需任务验证，`high` 表示多来源或强来源已相互印证。`confidence_basis` 必须说明为什么落在这个等级。`temporal_state` 描述内容是当前、规划、历史、混合、已被替代还是未知；`verification` 描述是否只完成来源确认、已被真实 Task 验证或得到用户确认。业务逻辑可以先以 medium/low draft 进入 Context 候选，人物归因默认要求 high identity confidence 与至少 medium pattern confidence；两者不能用一套阈值。
 
-`collection: people` 且 `quality_version >= 2` 的人物卡还必须写 `identity_confidence`、`pattern_confidence` 和 `independent_episode_count`。代码门禁要求身份为 `high`、模式至少为 `medium`、独立 Episode 至少 2 个；人物要变成 `verified`，还必须有 `task_validated` 或 `user_confirmed`。所以“身份匹配准确”不等于“已经形成稳定人物模式”。
+`quality_version: 4` 是新的事实编译合同：Knowledge 必须写 `product_type`、`compilation_ref`、`fact_refs` 和 `questions_answered`。只有 `playbook` 强制要求 `use_steps/use_checks/use_stop_conditions`；事实、架构、实体、流程和决策分别使用自己的类型结构，不再为了通过门禁被改写成通用操作卡。
 
-知识抽取不采用“全文摘要”作为默认产物，而采用 Knowledge Card：结论、证据链、推导/原因、适用条件、执行步骤或决策分支、例外与不适用、验证方法、当前未知项。正文可以短，但这些字段不能被摘要省略；细节过长时放在 Analysis Artifact，Knowledge 通过 `source_refs` 和 Artifact 链回去。
+个人 Knowledge 在此基础上增加独立的类型化准入。`scope=personal` 只是数据归属，不等于可信或可公开；`quality_version < 4` 的旧个人 draft 继续可读，但只能作为 advisory，不能直接晋升 `verified` 或进入公开发布。`quality_version >= 4` 的个人 Knowledge 必须同时通过通用质量检查和下表的个人准入检查：
+
+| 类型 | Draft 必须补齐 | Verified 额外条件 |
+|---|---|---|
+| `preference` | 来源、适用范围、边界、时间状态 | 用户确认，或真实任务验证且至少 2 个独立 Episode 跨 2 个日期 |
+| `goal` | 明确目标来源、适用范围、时间状态 | 用户确认或真实任务验证 |
+| `fact` / `entity` | 可回源事实、时间状态、编译引用 | `confidence=high`，且有来源确认、任务验证或用户确认 |
+| `decision` | 选择、适用范围、边界、反证/替代方案搜索 | 用户确认或真实任务验证 |
+| `playbook` | 完整输入、步骤、检查和停止条件，`product_type=playbook` | 至少一次真实任务验证或用户确认 |
+| `lesson` | 至少一个具体事件 Episode、改进边界 | 真实任务验证或用户确认 |
+| `synthesis` | 至少两个 `fact_refs`，保留编译来源 | 真实任务验证或用户确认 |
+| `people` 中的人物观察 | 使用人物专属身份、Episode、来源、日期、反证和禁止用途门禁 | 真实任务验证或用户确认 |
+
+这套检查由 `src/knowledge/personal-admission.ts` 提供单一接口，`knowledge capture/ingest`、状态晋升和 `knowledge lint` 共用；它只校验确定性的结构和证据计数，不让代码猜测正文是否“像偏好”或“像决定”。语义判断仍由 Analyst/Curator 产出，但缺少结构、证据或边界时不能落成正式个人 Knowledge。
+
+`collection: people` 且 `quality_version >= 4` 的稳定观察还必须写 `identity_confidence=high`、至少 `pattern_confidence=medium`、`independent_episode_count >= 3`、`independent_source_count >= 2`、`distinct_date_count >= 2`、`counterevidence_search` 和 `do_not_use_for`。数量只是必要条件；同一线程的相邻发言、引用和粘贴仍由 Verifier 合并为一个语义 Episode。人物要变成 `verified`，还必须有 `task_validated` 或 `user_confirmed`。
+
+知识抽取不采用“全文摘要”或“一文一卡”作为默认产物，而采用 Knowledge Compilation：证据片段及 hash、事实清单、核心问题覆盖、主张推导、类型化消费视图和未知项。Knowledge Card 是 Compilation 的消费投影，不能把未被卡片保留的关键事实藏在没有读取方的 Artifact 中。
 
 知识策展没有“每篇文章至少一条”的产量指标。每个已分析来源必须明确选择：`admit` 表示形成了会影响未来判断或行动的可复用结论；`skip` 表示只有临时状态、重复信息、无依据观点或与现有知识相比没有新增价值。`skip` 通过 `knowledge skip` 写入 `kind=knowledge / status=rejected` 的 Candidate 和账本事件，不创建 Vault Markdown；重复执行保持同一候选，不重复记账。
 
@@ -359,7 +376,7 @@ Action Gateway 是唯一副作用入口。CLI、未来的 UI、Agent prompt 和 
 
 Context Builder 使用一个统一 search 原语，允许关键词、属性、链接和语义召回作为内部策略，但上层只依赖统一结果。
 
-context pack 至少包含：任务目标与验收、当前状态、强制约束、相关决策、历史 pitfall、外部对象摘要、来源列表和未知项；对每条 Knowledge 还要带出 `use_when/use_inputs/use_outputs/use_steps/use_checks/use_stop_conditions` 使用契约。默认同时检索 `verified` 和 `draft`：verified 可作为可信规则，draft 必须标为 advisory 并先核对来源/未决项；要求严格时可使用 `--verified-only`。达到任务所需信息后停止，不追求塞满上下文。
+context pack 至少包含：任务目标与验收、当前状态、强制约束、相关决策、历史 pitfall、外部对象摘要、来源列表和未知项；对每条 v4 Knowledge 还要带出 `product_type/compilation_ref/fact_refs/questions_answered`，仅在类型为 playbook 时带出完整执行契约。人物观察还必须在当前问题不属于 `usable_for` 或命中 `do_not_use_for` 时抑制。默认同时检索 `verified` 和 `draft`：verified 可作为可信规则，draft 必须标为 advisory 并先核对来源/未决项；要求严格时可使用 `--verified-only`。达到任务所需信息后停止，不追求塞满上下文。
 
 Agent 在结果中声明 knowledgeReferences：用了哪条知识、用于哪个判断、状态是 trusted 还是 advisory、是否被本次结果验证。Context Pack 绑定 Run 时账本写入 `knowledge.referenced`；真实 Task 验收后可用 `knowledge.feedback_recorded` 记录 helpful/partial/incorrect/unused 和稳定原因码。只有后续真实 Task 验证才推动知识成熟度，路由阶段扫到文档不算引用。
 

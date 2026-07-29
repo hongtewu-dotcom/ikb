@@ -112,6 +112,10 @@ export function buildEvalReport(suite: EvalSuite, results: EvalResult[], runId: 
       reasonCodes,
     };
   });
+  const levelOnePassed = results.filter((result) => result.level === "L1").every((result) => result.status === "pass");
+  const requiredDomainGatesPassed = results
+    .filter((result) => result.caseId === "work-run-domain-result" && result.metrics.required === true)
+    .every((result) => result.status === "pass");
   return {
     schema: EVAL_REPORT_SCHEMA,
     evalVersion: EVAL_VERSION,
@@ -123,7 +127,7 @@ export function buildEvalReport(suite: EvalSuite, results: EvalResult[], runId: 
     runId,
     ...(subject?.subjectVersion ? { subjectVersion: subject.subjectVersion } : {}),
     ...(subject?.subjectHash ? { subjectHash: subject.subjectHash } : {}),
-    hardGatePassed: results.filter((result) => result.level === "L1").every((result) => result.status === "pass"),
+    hardGatePassed: levelOnePassed && requiredDomainGatesPassed,
     levels: levelReports,
     results,
   };

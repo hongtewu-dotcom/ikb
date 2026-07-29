@@ -45,7 +45,14 @@ export function searchKnowledge(home: string, query: string, options: { scope?: 
       const title = record.title.toLowerCase();
       const body = record.body.toLowerCase();
       const tags = record.tags.join(" ").toLowerCase();
-      const useText = [record.useWhen ?? "", ...(record.useInputs ?? []), ...(record.useOutputs ?? []), ...(record.useSteps ?? [])].join(" ").toLowerCase();
+      const useText = [
+        record.useWhen ?? "",
+        ...(record.useInputs ?? []),
+        ...(record.useOutputs ?? []),
+        ...(record.useSteps ?? []),
+        ...(record.questionsAnswered ?? []),
+        ...(record.doNotUseFor ?? []),
+      ].join(" ").toLowerCase();
       const score = terms.reduce((total, term) => total + (title.includes(term) ? 8 : 0) + (tags.includes(term) ? 4 : 0) + (useText.includes(term) ? 3 : 0) + (body.includes(term) ? 1 : 0), 0);
       return { record, score };
     })
@@ -62,6 +69,11 @@ export function searchKnowledge(home: string, query: string, options: { scope?: 
       path: record.path,
       score,
       snippet: makeSnippet(record.body, terms),
+      productType: record.productType,
+      compilationRef: record.compilationRef,
+      factRefs: record.factRefs,
+      questionsAnswered: record.questionsAnswered,
+      doNotUseFor: record.doNotUseFor,
       useWhen: record.useWhen,
       useInputs: record.useInputs,
       useOutputs: record.useOutputs,

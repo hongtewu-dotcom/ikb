@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { LedgerStore } from "../store.ts";
 import { assertValue, printValue } from "../format.ts";
 import { canonicalAgentId, validateAgentInvocation } from "../roles.ts";
+import { finishRunAndAssess } from "../run-completion.ts";
 import type { HarnessEventType } from "../../projects/eval-plane/src/harness-events.ts";
 import { createDefaultEvalRegistry } from "../../projects/eval-plane/src/eval-registry.ts";
-import { coordinateRunEvaluation, recordEvaluationFailure } from "../../projects/eval-plane/src/evaluation-coordinator.ts";
+import { coordinateRunEvaluation } from "../../projects/eval-plane/src/evaluation-coordinator.ts";
 import { IKB_RUN_QUALITY_SUITE_ID } from "../../projects/eval-plane/src/run-assessment.ts";
 import { evalPlaneRoot } from "./evaluation.ts";
 import {
@@ -155,17 +156,6 @@ export function handleRun(store: LedgerStore, home: string, action: string | und
     default:
       throw new Error(`Unknown run action: ${action ?? ""}`);
   }
-}
-
-function finishRunAndAssess(store: LedgerStore, runId: string, status: "succeeded" | "failed" | "canceled", summary?: string): ReturnType<LedgerStore["finishRun"]> {
-  const run = store.finishRun(runId, status, summary);
-  const registry = createDefaultEvalRegistry();
-  try {
-    coordinateRunEvaluation(store, registry, run.id, { projectRoot: evalPlaneRoot(), suiteId: IKB_RUN_QUALITY_SUITE_ID });
-  } catch {
-    recordEvaluationFailure(store, registry, run.id, IKB_RUN_QUALITY_SUITE_ID);
-  }
-  return run;
 }
 
 export function handleApproval(store: LedgerStore, action: string | undefined, args: string[], parsed: ParsedArgs): void {

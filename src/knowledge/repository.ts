@@ -42,6 +42,10 @@ export function captureKnowledge(home: string, input: KnowledgeInput): Knowledge
     derivedFrom: asRelationIds(input.derivedFrom),
     contradicts: asRelationIds(input.contradicts),
     qualityVersion: input.qualityVersion ?? 1,
+    productType: String(input.productType ?? "").trim(),
+    compilationRef: String(input.compilationRef ?? "").trim(),
+    factRefs: normalizeUseItems(input.factRefs),
+    questionsAnswered: normalizeUseItems(input.questionsAnswered),
     admissionReason: String(input.admissionReason ?? "").trim(),
     applicability: String(input.applicability ?? "").trim(),
     boundary: String(input.boundary ?? "").trim(),
@@ -58,6 +62,11 @@ export function captureKnowledge(home: string, input: KnowledgeInput): Knowledge
     identityConfidence: input.identityConfidence,
     patternConfidence: input.patternConfidence,
     independentEpisodeCount: input.independentEpisodeCount,
+    independentSourceCount: input.independentSourceCount,
+    distinctDateCount: input.distinctDateCount,
+    counterevidenceRefs: normalizeUseItems(input.counterevidenceRefs),
+    counterevidenceSearch: String(input.counterevidenceSearch ?? "").trim(),
+    doNotUseFor: normalizeUseItems(input.doNotUseFor),
     path: "",
     body: input.body.trim() + "\n",
   };
@@ -107,6 +116,10 @@ export function ingestKnowledge(home: string, source: string, options: { scope?:
     related: parsed.related,
     derivedFrom: parsed.derivedFrom,
     contradicts: parsed.contradicts,
+    productType: parsed.productType,
+    compilationRef: parsed.compilationRef,
+    factRefs: parsed.factRefs,
+    questionsAnswered: parsed.questionsAnswered,
     admissionReason: options.admissionReason ?? parsed.admissionReason,
     applicability: options.applicability ?? parsed.applicability,
     boundary: options.boundary ?? parsed.boundary,
@@ -124,6 +137,11 @@ export function ingestKnowledge(home: string, source: string, options: { scope?:
     identityConfidence: parsed.identityConfidence,
     patternConfidence: parsed.patternConfidence,
     independentEpisodeCount: parsed.independentEpisodeCount,
+    independentSourceCount: parsed.independentSourceCount,
+    distinctDateCount: parsed.distinctDateCount,
+    counterevidenceRefs: parsed.counterevidenceRefs,
+    counterevidenceSearch: parsed.counterevidenceSearch,
+    doNotUseFor: parsed.doNotUseFor,
     body: parsed.body || text,
   });
 }
@@ -189,12 +207,17 @@ export function buildContextPack(home: string, input: { taskId: string; title: s
       const record = findKnowledge(home, result.id);
       const body = record?.body.trim() || result.snippet;
       const contract = [
-        result.useWhen ? `- Use when: ${result.useWhen}` : "- Use when: not defined; treat this card as evidence, not an execution recipe",
+        result.productType ? `- Product type: ${result.productType}` : `- Product type: legacy ${result.type}`,
+        ...(result.questionsAnswered ?? []).length > 0 ? [`- Questions answered: ${(result.questionsAnswered ?? []).join("; ")}`] : [],
+        ...(result.factRefs ?? []).length > 0 ? [`- Fact refs: ${(result.factRefs ?? []).join("; ")}`] : [],
+        result.compilationRef ? `- Compilation: ${result.compilationRef}` : "- Compilation: legacy card; verify against source_refs before relying on it",
+        result.useWhen ? `- Use when: ${result.useWhen}` : "- Use when: load only when its answered questions are relevant to the task",
+        ...(result.doNotUseFor ?? []).length > 0 ? [`- Do not use for: ${(result.doNotUseFor ?? []).join("; ")}`] : [],
         ...(result.useInputs ?? []).length > 0 ? [`- Inputs: ${(result.useInputs ?? []).join("; ")}`] : ["- Inputs: not defined"],
         ...(result.useOutputs ?? []).length > 0 ? [`- Outputs: ${(result.useOutputs ?? []).join("; ")}`] : ["- Outputs: not defined"],
-        ...(result.useSteps ?? []).length > 0 ? ["- Steps:", ...(result.useSteps ?? []).map((item, index) => `  ${index + 1}. ${item}`)] : ["- Steps: not defined"],
-        ...(result.useChecks ?? []).length > 0 ? ["- Checks:", ...(result.useChecks ?? []).map((item) => `  - ${item}`)] : ["- Checks: not defined"],
-        ...(result.useStopConditions ?? []).length > 0 ? ["- Stop conditions:", ...(result.useStopConditions ?? []).map((item) => `  - ${item}`)] : ["- Stop conditions: not defined"],
+        ...(result.useSteps ?? []).length > 0 ? ["- Steps:", ...(result.useSteps ?? []).map((item, index) => `  ${index + 1}. ${item}`)] : [],
+        ...(result.useChecks ?? []).length > 0 ? ["- Checks:", ...(result.useChecks ?? []).map((item) => `  - ${item}`)] : [],
+        ...(result.useStopConditions ?? []).length > 0 ? ["- Stop conditions:", ...(result.useStopConditions ?? []).map((item) => `  - ${item}`)] : [],
       ];
       return [`## ${result.title}`, `- ID: ${result.id}`, `- Collection: ${result.collection}`, `- Scope: ${result.scope}`, `- Status: ${result.status}`, `- Verification: ${record?.verification ?? "unknown"}`, `- Source: ${result.path}`, "", "### Use contract", ...contract, "", "### Knowledge", body, ""];
     }),

@@ -31,6 +31,10 @@ export function parseKnowledge(text: string, path: string): KnowledgeRecord {
     derivedFrom: asRelationIds(fields.derived_from),
     contradicts: asRelationIds(fields.contradicts),
     qualityVersion: Number(fields.quality_version ?? 0) || 0,
+    productType: String(fields.product_type ?? "").trim(),
+    compilationRef: String(fields.compilation_ref ?? "").trim(),
+    factRefs: asStringArray(fields.fact_refs),
+    questionsAnswered: asStringArray(fields.questions_answered),
     admissionReason: String(fields.admission_reason ?? "").trim(),
     applicability: String(fields.applicability ?? "").trim(),
     boundary: String(fields.boundary ?? "").trim(),
@@ -47,6 +51,11 @@ export function parseKnowledge(text: string, path: string): KnowledgeRecord {
     identityConfidence: parseConfidenceOptional(fields.identity_confidence),
     patternConfidence: parseConfidenceOptional(fields.pattern_confidence),
     independentEpisodeCount: parseEpisodeCount(fields.independent_episode_count),
+    independentSourceCount: parseEpisodeCount(fields.independent_source_count),
+    distinctDateCount: parseEpisodeCount(fields.distinct_date_count),
+    counterevidenceRefs: asStringArray(fields.counterevidence_refs),
+    counterevidenceSearch: String(fields.counterevidence_search ?? "").trim(),
+    doNotUseFor: asStringArray(fields.do_not_use_for),
     path,
     body,
   };
@@ -64,8 +73,15 @@ export function renderKnowledge(record: KnowledgeRecord): string {
   const personFields = record.collection === "people" ? [
     `identity_confidence: ${record.identityConfidence ?? ""}`,
     `pattern_confidence: ${record.patternConfidence ?? ""}`,
-    `independent_episode_count: ${record.independentEpisodeCount ?? ""}`,
   ] : [];
+  const evidenceFields = [
+    ...(record.independentEpisodeCount === undefined ? [] : [`independent_episode_count: ${record.independentEpisodeCount}`]),
+    ...(record.independentSourceCount === undefined ? [] : [`independent_source_count: ${record.independentSourceCount}`]),
+    ...(record.distinctDateCount === undefined ? [] : [`distinct_date_count: ${record.distinctDateCount}`]),
+    ...(record.counterevidenceRefs?.length ? [`counterevidence_refs: ${JSON.stringify(record.counterevidenceRefs)}`] : []),
+    ...(record.counterevidenceSearch ? [`counterevidence_search: ${JSON.stringify(record.counterevidenceSearch)}`] : []),
+    ...(record.doNotUseFor?.length ? [`do_not_use_for: ${JSON.stringify(record.doNotUseFor)}`] : []),
+  ];
   return [
     "---",
     `id: ${record.id}`,
@@ -85,6 +101,10 @@ export function renderKnowledge(record: KnowledgeRecord): string {
     `derived_from: ${JSON.stringify(record.derivedFrom.map((id) => relationLink(id)))}`,
     `contradicts: ${JSON.stringify(record.contradicts.map((id) => relationLink(id)))}`,
     `quality_version: ${record.qualityVersion}`,
+    `product_type: ${JSON.stringify(record.productType ?? "")}`,
+    `compilation_ref: ${JSON.stringify(record.compilationRef ?? "")}`,
+    `fact_refs: ${JSON.stringify(record.factRefs ?? [])}`,
+    `questions_answered: ${JSON.stringify(record.questionsAnswered ?? [])}`,
     `admission_reason: ${JSON.stringify(record.admissionReason)}`,
     `applicability: ${JSON.stringify(record.applicability)}`,
     `boundary: ${JSON.stringify(record.boundary)}`,
@@ -99,6 +119,7 @@ export function renderKnowledge(record: KnowledgeRecord): string {
     `temporal_state: ${record.temporalState ?? "unknown"}`,
     `verification: ${record.verification ?? (record.status === "verified" ? "source_confirmed" : "unverified")}`,
     ...personFields,
+    ...evidenceFields,
     "---",
     record.body,
   ].join("\n");

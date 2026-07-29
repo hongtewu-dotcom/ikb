@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { archiveRetiredKnowledge, captureKnowledge, buildContextPack, completeKnowledgeMigration, ingestKnowledge, initializeKnowledgeLayout, inspectKnowledgeLayout, listKnowledge, migrateLegacyKnowledge, rebuildKnowledgeViews, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
+import { archiveRetiredKnowledge, captureKnowledge, buildContextPack, completeKnowledgeMigration, ingestKnowledge, initializeKnowledgeLayout, inspectKnowledgeLayout, isPersonalAdmissionReady, listKnowledge, migrateLegacyKnowledge, rebuildKnowledgeViews, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
 
 test("knowledge capture writes frontmatter and search returns source-scoped results", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-kb-test-"));
@@ -200,7 +200,27 @@ test("document ingest preserves quality version and parsed lifecycle metadata", 
 test("context pack includes verified and draft knowledge with an explicit use policy", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-context-test-"));
   const draft = captureKnowledge(home, { title: "Draft note", body: "technical plan source", scope: "personal", status: "draft" });
-  const verified = captureKnowledge(home, { title: "Verified plan rule", body: "technical plan source", scope: "personal", status: "verified", sourceRefs: ["user-confirmation:test"] });
+  const verified = captureKnowledge(home, {
+    title: "Verified plan rule",
+    type: "fact",
+    body: "technical plan source",
+    scope: "personal",
+    status: "verified",
+    sourceKind: "manual",
+    sourceRefs: ["user-confirmation:test"],
+    qualityVersion: 4,
+    productType: "fact_card",
+    compilationRef: "artifact:plan-test",
+    factRefs: ["fact:plan-test"],
+    questionsAnswered: ["这条规则用于什么任务？"],
+    admissionReason: "会影响后续技术方案准备。",
+    applicability: "准备技术方案时。",
+    boundary: "不替代当前项目的事实核对。",
+    confidence: "high",
+    confidenceBasis: ["用户确认"],
+    temporalState: "current",
+    verification: "user_confirmed",
+  });
   const context = buildContextPack(home, { taskId: "task-1", title: "plan", goal: "technical plan", acceptance: "source" });
   assert.equal(context.results.length, 2);
   assert.deepEqual(new Set(context.results.map((item) => item.id)), new Set([draft.id, verified.id]));
@@ -237,6 +257,234 @@ test("quality version 3 requires a task-facing use contract", () => {
     confidenceBasis: ["source"],
   });
   assert.deepEqual(record.useSteps, ["read", "check"]);
+});
+
+test("quality version 4 uses type-specific contracts instead of forcing facts into playbooks", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-v4-type-contract-test-"));
+  const architecture = captureKnowledge(home, {
+    title: "Typed architecture map",
+    type: "fact",
+    collection: "domains",
+    body: "## 节点\n\nAPI、renderer、adaptor。\n\n## 边\n\nAPI → renderer → adaptor。",
+    scope: "work",
+    sourceKind: "document",
+    sourceRefs: ["src:architecture"],
+    qualityVersion: 4,
+    productType: "architecture_map",
+    compilationRef: "/tmp/architecture-compilation.md",
+    factRefs: ["f-node-api", "f-edge-renderer"],
+    questionsAnswered: ["当前来源明确了哪些节点和边"],
+    admissionReason: "保留来源里的架构节点与关系。",
+    applicability: "架构范围判断。",
+    boundary: "来源时点快照，不证明当前上线状态。",
+    confidenceBasis: ["正式文档与图节点"],
+  });
+  assert.equal(architecture.productType, "architecture_map");
+  assert.deepEqual(architecture.useSteps, []);
+  const context = buildContextPack(home, { taskId: "task-v4", title: "架构", goal: "判断 renderer 链路", acceptance: "有事实引用", scope: "work" });
+  assert.match(context.markdown, /Product type: architecture_map/);
+  assert.match(context.markdown, /Fact refs: f-node-api; f-edge-renderer/);
+
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "Playbook without procedure",
+      type: "playbook",
+      body: "只有一个结论。",
+      scope: "work",
+      sourceKind: "document",
+      sourceRefs: ["src:playbook"],
+      qualityVersion: 4,
+      productType: "playbook",
+      compilationRef: "/tmp/playbook-compilation.md",
+      factRefs: ["f-step"],
+      questionsAnswered: ["怎样执行"],
+      admissionReason: "尝试形成执行卡。",
+      applicability: "执行任务。",
+      boundary: "缺步骤时不可用。",
+      confidenceBasis: ["正式文档"],
+    }),
+    /use_when_missing.*use_steps_missing/s,
+  );
+});
+
+test("quality version 4 evidence and safety metadata survive capture and reload", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-v4-metadata-roundtrip-test-"));
+  const created = captureKnowledge(home, {
+    title: "Reloadable domain fact pack",
+    type: "fact",
+    collection: "domains",
+    body: "A bounded fact pack with explicit evidence and prohibited uses.",
+    scope: "work",
+    sourceKind: "artifact",
+    sourceRefs: ["src:one", "src:two"],
+    qualityVersion: 4,
+    productType: "domain_pack",
+    compilationRef: "/tmp/domain-compilation.md",
+    factRefs: ["f-one"],
+    questionsAnswered: ["What may the agent safely conclude?"],
+    admissionReason: "The fact pack has a direct task consumer.",
+    applicability: "Use for bounded domain analysis.",
+    boundary: "Do not treat planned behavior as current production behavior.",
+    confidenceBasis: ["two source records"],
+    independentEpisodeCount: 2,
+    independentSourceCount: 2,
+    distinctDateCount: 2,
+    counterevidenceRefs: ["src:counterexample"],
+    counterevidenceSearch: "Checked the same domain and date window for conflicting evidence.",
+    doNotUseFor: ["production rollout decisions"],
+  });
+
+  const reloaded = listKnowledge(home).find((record) => record.id === created.id);
+  assert.ok(reloaded);
+  assert.equal(reloaded.independentEpisodeCount, 2);
+  assert.equal(reloaded.independentSourceCount, 2);
+  assert.equal(reloaded.distinctDateCount, 2);
+  assert.deepEqual(reloaded.counterevidenceRefs, ["src:counterexample"]);
+  assert.equal(reloaded.counterevidenceSearch, "Checked the same domain and date window for conflicting evidence.");
+  assert.deepEqual(reloaded.doNotUseFor, ["production rollout decisions"]);
+});
+
+test("quality version 4 person observation needs recurrence, source/date spread and prohibited uses", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-v4-person-contract-test-"));
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "Two narrow person episodes",
+      type: "preference",
+      collection: "people",
+      body: "两次窄场景发言。",
+      scope: "work",
+      sourceKind: "artifact",
+      sourceRefs: ["artifact:person"],
+      qualityVersion: 4,
+      productType: "person_observation",
+      compilationRef: "/tmp/person-compilation.md",
+      factRefs: ["f-episode-1", "f-episode-2"],
+      questionsAnswered: ["怎样准备沟通"],
+      admissionReason: "尝试形成稳定观察。",
+      applicability: "报价沟通。",
+      boundary: "不推断人格。",
+      confidenceBasis: ["两个 Episode"],
+      identityConfidence: "high",
+      patternConfidence: "medium",
+      independentEpisodeCount: 2,
+      independentSourceCount: 2,
+      distinctDateCount: 2,
+    }),
+    /person_episode_count_insufficient.*person_do_not_use_for_missing.*person_counterevidence_search_missing/s,
+  );
+});
+
+test("formal personal knowledge requires a traceable type-specific admission contract", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-personal-admission-contract-test-"));
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "个人决策缺少准入合同",
+      type: "decision",
+      collection: "decisions",
+      scope: "personal",
+      sourceKind: "manual",
+      qualityVersion: 4,
+      productType: "decision_card",
+      compilationRef: "artifact:decision-compilation",
+      factRefs: ["fact:decision"],
+      questionsAnswered: ["何时使用这项决定？"],
+      confidence: "medium",
+      confidenceBasis: ["本人记录"],
+      temporalState: "current",
+      body: "只保留决定正文，不提供来源和边界。",
+    }),
+    /personal_source_refs_missing.*personal_admission_reason_missing.*personal_applicability_missing.*personal_boundary_missing.*personal_decision_counterevidence_search_missing/s,
+  );
+  assert.equal(listKnowledge(home).length, 0);
+});
+
+test("formal personal preference cannot become verified from one isolated episode", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-personal-preference-gate-test-"));
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "单次选择不能固化为偏好",
+      type: "preference",
+      collection: "concepts",
+      scope: "personal",
+      sourceKind: "ai_conversation",
+      sourceRefs: ["src:preference-1"],
+      status: "verified",
+      qualityVersion: 4,
+      productType: "preference_card",
+      compilationRef: "artifact:preference-compilation",
+      factRefs: ["fact:preference-1"],
+      questionsAnswered: ["后续任务如何使用？"],
+      admissionReason: "会改变后续任务的准备方式。",
+      applicability: "需要准备个人工作输出时。",
+      boundary: "不代表永久偏好，也不用于他人判断。",
+      confidence: "medium",
+      confidenceBasis: ["一个会话中的一次选择"],
+      temporalState: "current",
+      verification: "source_confirmed",
+      independentEpisodeCount: 1,
+      distinctDateCount: 1,
+      body: "在一次会话中选择了某种输出方式。",
+    }),
+    /personal_preference_evidence_insufficient/,
+  );
+  assert.equal(listKnowledge(home).length, 0);
+});
+
+test("formal personal decision can be verified when its consumer contract and confirmation are explicit", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-personal-decision-admission-test-"));
+  const record = captureKnowledge(home, {
+    title: "个人决策有边界地进入知识库",
+    type: "decision",
+    collection: "decisions",
+    scope: "personal",
+    sourceKind: "manual",
+    sourceRefs: ["user-confirmation:decision-1"],
+    status: "verified",
+    qualityVersion: 4,
+    productType: "decision_card",
+    compilationRef: "artifact:decision-compilation",
+    factRefs: ["fact:decision-1"],
+    questionsAnswered: ["什么时候采用这个决定？", "什么时候停止采用？"],
+    admissionReason: "会改变后续任务的选择和准备动作。",
+    applicability: "在个人工作流需要选择输出策略时。",
+    boundary: "不适用于工作业务规则，也不代表永久有效。",
+    confidence: "high",
+    confidenceBasis: ["本人明确确认并写出适用边界"],
+    temporalState: "current",
+    verification: "user_confirmed",
+    counterevidenceSearch: "检查了近期相反决定和失效条件，未发现冲突。",
+    body: "在个人工作流中采用该策略；出现边界条件时停止并重新判断。",
+  });
+  assert.equal(record.status, "verified");
+  assert.equal(record.verification, "user_confirmed");
+});
+
+test("legacy personal verified knowledge cannot bypass the formal admission version", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-personal-legacy-verified-test-"));
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "旧个人知识",
+      type: "fact",
+      scope: "personal",
+      sourceKind: "manual",
+      sourceRefs: ["user-confirmation:legacy"],
+      status: "verified",
+      body: "旧格式没有类型化准入合同。",
+    }),
+    /personal_quality_version_insufficient/,
+  );
+});
+
+test("legacy personal drafts remain readable but are not ready for verification or publication", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-personal-legacy-draft-test-"));
+  const record = captureKnowledge(home, {
+    title: "旧个人草稿",
+    type: "fact",
+    scope: "personal",
+    body: "旧格式草稿仍可作为 advisory 上下文。",
+  });
+  assert.equal(record.status, "draft");
+  assert.equal(isPersonalAdmissionReady(record), false);
 });
 
 test("knowledge quality gate rejects literal newline escapes before writing", () => {

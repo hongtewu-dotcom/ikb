@@ -1,9 +1,10 @@
 import type { AdapterEvaluation, EvalSubject } from "./eval-adapters.ts";
 import { DETERMINISTIC_GRADER_VERSION, EVAL_CASE_SCHEMA, EVAL_SUITE_SCHEMA, type EvalCase, type EvalLevel, type EvalSuite } from "./eval-contract.ts";
-import type { WorkNodeSubject, WorkRunSubject, WorkRunSubjectData } from "./work-run-subject.ts";
+import { WORK_RUN_QUALITY_SUITE_ID, workQualityHistory, type WorkQualityAttempt } from "./work-quality-history.ts";
+import { WORK_RUN_SUBJECT_VERSION, type WorkNodeSubject, type WorkRunSubject, type WorkRunSubjectData } from "./work-run-subject.ts";
 
-export const WORK_RUN_QUALITY_SUITE_ID = "work-run-quality";
-export const WORK_RUN_QUALITY_SUITE_VERSION = "v1";
+export { WORK_RUN_QUALITY_SUITE_ID } from "./work-quality-history.ts";
+export const WORK_RUN_QUALITY_SUITE_VERSION = "v4";
 
 const HARD_DISPATCH_REASONS = new Set(["independent_write", "approval_boundary", "independent_verification", "independent_retry"]);
 const SOFT_DISPATCH_REASONS = new Set(["parallelism", "context_reduction", "evidence_separation", "owner_separation"]);
@@ -29,6 +30,12 @@ interface WorkQualityFacts {
   completedNodes: number;
   handoffNodes: number;
   concurrentWriteConflicts: number;
+}
+
+interface CanonicalScope {
+  root: string;
+  segments: string[];
+  caseInsensitive: boolean;
 }
 
 export function workRunAssessmentSuite(): { suite: EvalSuite; cases: EvalCase[] } {
@@ -77,7 +84,7 @@ export function workRunAssessmentSuite(): { suite: EvalSuite; cases: EvalCase[] 
       id: "work-run-recovery-quality",
       level: "L2",
       title: "首次与最终质量可计算",
-      description: "从 Attempts 与验证事件计算 first pass、final pass、修复轮次和恢复成功。",
+      description: "从节点 Attempts 及 task.verified→evaluation.trigger_completed 序列分别计算重试、修复轮次和恢复成功。",
       invariants: ["final_quality_computable"],
       tags: ["real-run", "metric", "recovery"],
     },
@@ -85,9 +92,9 @@ export function workRunAssessmentSuite(): { suite: EvalSuite; cases: EvalCase[] 
       id: "work-run-domain-result",
       level: "L3",
       title: "业务结果由领域 Suite 负责",
-      description: "通用 Work Harness 不伪造任务领域正确性；未注册领域 Suite 时明确返回 not_applicable。",
-      expected: "not_applicable",
-      invariants: ["domain_suite_explicit"],
+      description: "存在 domain-evaluation.json 时校验其身份、报告 hash 和真实结果；未注册时明确返回 not_applicable。",
+      expected: "pass_or_not_applicable",
+      invariants: ["domain_suite_explicit", "domain_report_bound", "required_domain_gate_enforced"],
       tags: ["real-run", "domain", "adapter-boundary"],
     },
   ];
@@ -168,7 +175,7 @@ export function evaluateWorkRunAssessmentCase(testCase: EvalCase, value: EvalSub
         recoverySucceeded: facts.recoverySucceeded,
       }, subject);
     case "work-run-domain-result":
-      return evaluated(testCase, "not_applicable", [], { domainSuiteRegistered: false }, subject);
+      return domainEvaluation(subject);
     default:
       throw new Error(`Work Run Assessment does not support case ${testCase.caseId}`);
   }
@@ -180,9 +187,13 @@ function qualityFacts(data: WorkRunSubjectData): WorkQualityFacts {
   const verification = verificationFacts(data);
   const retry = retryFacts(data);
   const contractPassed = data.integrity.valid;
-  const finalPass = contractPassed && graph.passed && closure.passed && verification.passed && retry.passed;
-  const repairRounds = data.events.filter((event) => event.event === "task.verified" && event.verdict === "fail").length;
-  const firstPass = finalPass && retry.retryRounds === 0 && repairRounds === 0;
+  const commonPassed = contractPassed && graph.passed && closure.passed && verification.passed && retry.passed;
+  const currentOverallPassed = commonPassed && currentDomainPassed(data);
+  const qualityAttempts = workQualityHistory(data.events, data.task.runId);
+  const qualityOutcomes = qualityAttempts.map((attempt) => qualityAttemptPassed(attempt, currentOverallPassed));
+  const repairRounds = qualityOutcomes.filter((passed) => !passed).length;
+  const finalPass = currentOverallPassed && qualityOutcomes.length > 0 && qualityOutcomes.at(-1) === true;
+  const firstPass = finalPass && repairRounds === 0;
   return {
     contractPassed,
     graphPassed: graph.passed,
@@ -191,7 +202,7 @@ function qualityFacts(data: WorkRunSubjectData): WorkQualityFacts {
     retryPassed: retry.passed,
     finalPass,
     firstPass,
-    recoverySucceeded: finalPass && !firstPass,
+    recoverySucceeded: finalPass && repairRounds > 0,
     retryRounds: retry.retryRounds,
     repairRounds,
     maxObservedRetries: retry.maxObservedRetries,
@@ -203,6 +214,78 @@ function qualityFacts(data: WorkRunSubjectData): WorkQualityFacts {
     completedNodes: closure.completedNodes,
     handoffNodes: closure.handoffNodes,
     concurrentWriteConflicts: graph.concurrentWriteConflicts,
+  };
+}
+
+function qualityAttemptPassed(attempt: WorkQualityAttempt, currentOverallPassed: boolean): boolean {
+  if (attempt.verification.verdict !== "pass") return false;
+  if (!attempt.trigger) return currentOverallPassed;
+  return attempt.trigger.event === "evaluation.trigger_completed"
+    && attempt.trigger.hardGatePassed === true
+    && attempt.trigger.result === "pass";
+}
+
+function currentDomainPassed(data: WorkRunSubjectData): boolean {
+  const domain = data.domainEvaluation;
+  return !domain.registered || (domain.valid && domain.result === "pass" && domain.hardGatePassed);
+}
+
+function domainEvaluation(subject: WorkRunSubject): AdapterEvaluation {
+  const domain = subject.data.domainEvaluation;
+  if (!domain.registered) {
+    return {
+      observed: "not_applicable",
+      passed: true,
+      reasonCodes: [],
+      metrics: { domain_registered: false, required: false },
+      evidenceRefs: [`run://${subject.runId}/work/domain-evaluation`],
+      artifactRefs: [],
+      diagnosis: "subject",
+    };
+  }
+  const metrics: AdapterEvaluation["metrics"] = {
+    ...domain.metrics,
+    domain_registered: true,
+    required: domain.required,
+    hard_gate_passed: domain.hardGatePassed,
+    suite_id: domain.suiteId ?? "invalid",
+    suite_version: domain.suiteVersion ?? "invalid",
+    grader_version: domain.graderVersion ?? "invalid",
+    domain_result: domain.result,
+    evidence_count: domain.evidenceRefs.length,
+    report_hash: domain.reportHash ?? "invalid",
+  };
+  const evidenceRefs = [
+    `run://${subject.runId}/work/domain-evaluation`,
+    ...domain.evidenceRefs.map((reference, index) => reference.startsWith("file://")
+      ? `run://${subject.runId}/work/domain-evidence/${index + 1}`
+      : reference),
+  ];
+  const artifactRefs = domain.reportHash
+    ? [`artifact://work-harness/${subject.runId}/domain-report/${domain.reportHash}`]
+    : [];
+  if (!domain.valid) {
+    return {
+      observed: "blocked",
+      passed: false,
+      reasonCodes: domain.reasonCodes.length > 0 ? domain.reasonCodes : ["domain_evaluation_invalid"],
+      metrics,
+      evidenceRefs,
+      artifactRefs,
+      diagnosis: "subject",
+    };
+  }
+  if (domain.result === "pass" && domain.hardGatePassed) {
+    return { observed: "pass", passed: true, reasonCodes: [], metrics, evidenceRefs, artifactRefs, diagnosis: "subject" };
+  }
+  return {
+    observed: "blocked",
+    passed: false,
+    reasonCodes: [domain.required ? "required_domain_evaluation_blocked" : "domain_evaluation_blocked"],
+    metrics,
+    evidenceRefs,
+    artifactRefs,
+    diagnosis: "subject",
   };
 }
 
@@ -303,17 +386,69 @@ function countConcurrentWriteConflicts(nodes: WorkNodeSubject[], events: WorkRun
       }
       active.add(event.nodeId);
     }
-    if (event.event === "node.handoff_recorded") active.delete(event.nodeId);
+    if (event.event === "node.handoff_recorded" || event.event === "node.stale_recovered") active.delete(event.nodeId);
   }
   return conflicts;
 }
 
 function scopesOverlap(left: string[], right: string[]): boolean {
-  return left.some((leftScope) => right.some((rightScope) => {
-    const a = leftScope.replace(/\/$/, "");
-    const b = rightScope.replace(/\/$/, "");
-    return Boolean(a && b) && (a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`));
-  }));
+  return left.some((leftScope) => right.some((rightScope) => canonicalScopesOverlap(
+    canonicalScope(leftScope),
+    canonicalScope(rightScope),
+  )));
+}
+
+function canonicalScopesOverlap(left: CanonicalScope, right: CanonicalScope): boolean {
+  if (left.root !== right.root) return false;
+  const insensitive = left.caseInsensitive || right.caseInsensitive;
+  const sharedLength = Math.min(left.segments.length, right.segments.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftSegment = insensitive ? left.segments[index].toLowerCase() : left.segments[index];
+    const rightSegment = insensitive ? right.segments[index].toLowerCase() : right.segments[index];
+    if (leftSegment !== rightSegment) return false;
+  }
+  return true;
+}
+
+function canonicalScope(value: string): CanonicalScope {
+  const raw = value.trim();
+  const windows = /^[A-Za-z]:[\\/]/.test(raw) || /^\\\\/.test(raw);
+  const normalized = windows ? raw.replace(/\\/g, "/") : raw;
+  let root = "relative";
+  let remainder = normalized;
+  let absolute = false;
+
+  const driveAbsolute = /^([A-Za-z]):\/+/.exec(normalized);
+  if (driveAbsolute) {
+    root = `windows-drive:${driveAbsolute[1].toLowerCase()}`;
+    remainder = normalized.slice(driveAbsolute[0].length);
+    absolute = true;
+  } else if (windows && normalized.startsWith("//")) {
+    const parts = normalized.replace(/^\/+/, "").split(/\/+/);
+    const server = parts.shift() ?? "";
+    const share = parts.shift() ?? "";
+    root = `windows-unc:${server.toLowerCase()}/${share.toLowerCase()}`;
+    remainder = parts.join("/");
+    absolute = true;
+  } else {
+    if (normalized.startsWith("/")) {
+      root = "posix-root";
+      remainder = normalized.replace(/^\/+/, "");
+      absolute = true;
+    }
+  }
+
+  const segments: string[] = [];
+  for (const segment of remainder.split(/\/+/)) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0 && segments.at(-1) !== "..") segments.pop();
+      else if (!absolute) segments.push(segment);
+      continue;
+    }
+    segments.push(segment);
+  }
+  return { root, segments, caseInsensitive: windows };
 }
 
 function evaluated(testCase: EvalCase, observed: string, reasonCodes: string[], metrics: AdapterEvaluation["metrics"], subject: WorkRunSubject): AdapterEvaluation {
@@ -330,7 +465,7 @@ function evaluated(testCase: EvalCase, observed: string, reasonCodes: string[], 
 }
 
 function requireWorkRunSubject(value: EvalSubject): WorkRunSubject {
-  if (value.adapter !== "work-harness" || !value.runId || !value.subjectHash || value.subjectVersion !== "work-harness-run-subject.v1") throw new Error("Work Run Assessment requires a real WorkRunSubject");
+  if (value.adapter !== "work-harness" || !value.runId || !value.subjectHash || value.subjectVersion !== WORK_RUN_SUBJECT_VERSION) throw new Error("Work Run Assessment requires a real WorkRunSubject");
   return value as WorkRunSubject;
 }
 

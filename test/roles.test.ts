@@ -23,6 +23,7 @@ test("agent role manifests expose stable ids, Chinese names, gates and skills", 
   ]);
   assert.deepEqual(roles.find((role) => role.id === "ikb-operator")?.gates, ["G4", "G5", "G6"]);
   assert.equal(roles.find((role) => role.id === "ikb-intake")?.skills.includes("ikb-source-intake"), true);
+  assert.equal(roles.find((role) => role.id === "ikb-harness")?.skills.includes("publication-build"), true);
 });
 
 test("role invocation validates allowed skills and keeps legacy aliases readable", () => {
@@ -39,6 +40,9 @@ test("role invocation validates allowed skills and keeps legacy aliases readable
   const wrongTaskType = validateAgentInvocation("ikb-intake", [], "coding");
   assert.equal(wrongTaskType.ok, false);
   assert.match(wrongTaskType.issues[0], /does not accept Task type/);
+
+  const publication = validateAgentInvocation("ikb-harness", ["publication-build"], "publication");
+  assert.equal(publication.ok, true);
 });
 
 test("gate catalog exposes current implementation status", () => {

@@ -217,7 +217,7 @@ python3 scripts/pull-catpaw-memory.py --output ikb-data/staging/catpaw-memory/la
 
 远端记忆与 Agent 会话一样先是证据，不自动晋升为 verified Knowledge；混合个人/工作内容本轮按工作域私有快照保存，后续提炼时再拆分域。
 
-关键人物目录通过 `ikb people list|add|update|remove` 维护，当前只保存身份元数据（MIS、可选 UID、显示名和别名），默认工作域；文件位于 `ikb-data/entities/people/key-people.json`，不进入 Git。`ikb people view <id>` 会在 `vaults/<scope>/people/<id>/index.md` 生成跨来源证据视图，`people rebuild` 批量重建启用人物。视图只按身份字段、作者/评论者/参与者和显式 refs 归集，不把正文中提到某人的内容自动归给该人；原始 Source 仍按来源分开保存，视图删除后可重建。
+关键人物目录通过 `ikb people list|add|update|remove` 维护，当前只保存身份元数据（MIS、可选 UID、显示名和别名），默认工作域；文件位于 `ikb-data/entities/people/key-people.json`，不进入 Git。`ikb people view <id>` 会在 `vaults/<scope>/people/<id>/index.md` 生成跨来源证据视图，`people rebuild` 批量重建启用人物。同一 scope 的批量重建只读取一遍 normalized Sources，再把记录分发给所有关键人物，避免按人数重复扫描。视图只按身份字段、作者/评论者/参与者和显式 refs 归集，不把正文中提到某人的内容自动归给该人；原始 Source 仍按来源分开保存，视图删除后可重建。视图发生截断时固定优先展示署名/owner/修改文档、评论和本人发言，context 只排在直接证据之后，不能挤掉可用于蒸馏的直接 Episode。
 
 人物视图不会进入 Knowledge 检索：人物目录下的 `index.md` 是可重建投影；需要形成事实、决策、偏好或 playbook 时，Agent 仍要引用视图中的 Source record，再通过 `ikb capture` 写入 draft Knowledge。
 

@@ -1,0 +1,70 @@
+{
+  "schema": "work-harness-domain-evaluated-at-vectors-v1",
+  "cases": [
+    {
+      "id": "ordinary-utc",
+      "value": "2026-07-23T10:00:00Z",
+      "valid": true
+    },
+    {
+      "id": "leap-day",
+      "value": "2024-02-29T23:59:59.123456Z",
+      "valid": true
+    },
+    {
+      "id": "positive-offset",
+      "value": "2026-07-23T10:00:00+05:30",
+      "valid": true
+    },
+    {
+      "id": "negative-offset",
+      "value": "2026-07-23T10:00:00-07:45",
+      "valid": true
+    },
+    {
+      "id": "non-leap-day",
+      "value": "2023-02-29T10:00:00Z",
+      "valid": false
+    },
+    {
+      "id": "normalized-february-day",
+      "value": "2024-02-30T10:00:00Z",
+      "valid": false
+    },
+    {
+      "id": "thirty-day-month-overflow",
+      "value": "2026-04-31T10:00:00Z",
+      "valid": false
+    },
+    {
+      "id": "hour-24",
+      "value": "2026-07-23T24:00:00Z",
+      "valid": false
+    },
+    {
+      "id": "minute-60",
+      "value": "2026-07-23T10:60:00Z",
+      "valid": false
+    },
+    {
+      "id": "second-60",
+      "value": "2026-07-23T10:00:60Z",
+      "valid": false
+    },
+    {
+      "id": "offset-hour-24",
+      "value": "2026-07-23T10:00:00+24:00",
+      "valid": false
+    },
+    {
+      "id": "offset-minute-60",
+      "value": "2026-07-23T10:00:00-05:60",
+      "valid": false
+    },
+    {
+      "id": "timezone-missing",
+      "value": "2026-07-23T10:00:00",
+      "valid": false
+    }
+  ]
+}

@@ -105,6 +105,11 @@ export interface KnowledgeRecord {
   derivedFrom: string[];
   contradicts: string[];
   qualityVersion: number;
+  /** v4: the typed consumer view produced from a fact-preserving compilation. */
+  productType?: string;
+  compilationRef?: string;
+  factRefs?: string[];
+  questionsAnswered?: string[];
   admissionReason: string;
   applicability: string;
   boundary: string;
@@ -124,6 +129,11 @@ export interface KnowledgeRecord {
   identityConfidence?: KnowledgeConfidence;
   patternConfidence?: KnowledgeConfidence;
   independentEpisodeCount?: number;
+  independentSourceCount?: number;
+  distinctDateCount?: number;
+  counterevidenceRefs?: string[];
+  counterevidenceSearch?: string;
+  doNotUseFor?: string[];
   path: string;
   body: string;
 }
@@ -224,6 +234,11 @@ export interface KnowledgeSearchResult {
   path: string;
   score: number;
   snippet: string;
+  productType?: string;
+  compilationRef?: string;
+  factRefs?: string[];
+  questionsAnswered?: string[];
+  doNotUseFor?: string[];
   useWhen?: string;
   useInputs?: string[];
   useOutputs?: string[];

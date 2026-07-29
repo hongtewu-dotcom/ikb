@@ -20,6 +20,7 @@ export {
 } from "./knowledge/contracts.ts";
 export { knowledgeDirectoryForType, resolveKnowledgeDirectory } from "./knowledge/catalog.ts";
 export { assertKnowledgeQuality, inspectKnowledgeQuality } from "./knowledge/quality.ts";
+export { PERSONAL_FORMAL_QUALITY_VERSION, inspectPersonalAdmission, isPersonalAdmissionReady } from "./knowledge/personal-admission.ts";
 export { findKnowledge, listKnowledge, reviewKnowledge, searchKnowledge } from "./knowledge/records.ts";
 export { initializeKnowledgeLayout, rebuildKnowledgeViews } from "./knowledge/views.ts";
 export { buildContextPack, captureKnowledge, ingestKnowledge, relateKnowledge, updateKnowledgeStatus } from "./knowledge/repository.ts";

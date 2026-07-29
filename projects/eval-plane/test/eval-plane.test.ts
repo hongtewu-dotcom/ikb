@@ -27,6 +27,7 @@ test("the unified registry keeps the legacy twelve cases and exposes versioned a
   ]);
   assert.equal(registry.getSuite("ikb-run-quality").kind, "run_assessment");
   assert.equal(registry.getSuite("work-run-quality").kind, "run_assessment");
+  assert.equal(registry.getSuite("work-run-quality").suiteVersion, "v4");
 });
 
 test("duplicate Suite id and version is rejected", () => {

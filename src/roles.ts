@@ -26,7 +26,7 @@ const ROLE_MANIFESTS: readonly AgentManifest[] = [
     name: "任务总管",
     description: "执行编排、单次 Run 复盘、跨 Task 模式发现、改进建议，以及 Context Pack、Approval 和恢复流程。",
     accepts: ["general", "*"],
-    skills: ["task-plan", "context-build", "approval-request", "run-recovery", "maintenance"],
+    skills: ["task-plan", "context-build", "approval-request", "run-recovery", "maintenance", "publication-build"],
     gates: ["G0", "G4", "G5", "G6"],
     read: ["task", "run", "source", "knowledge", "artifact", "approval"],
     write: ["task", "run", "ledger", "approval"],

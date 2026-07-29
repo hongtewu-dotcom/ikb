@@ -225,7 +225,9 @@ CLI 和本地 daemon 负责访问 Vault、Git 和 Agent runtime。后续若需�
 
 | 现有能力 | 在 ikb 中的定位 | 复用方式 |
 |---|---|---|
-| CatPaw Memory | 热记忆 | 定期抽取候选知识；只回灌索引和近期重点 |
+| CatPaw / Codex Memory | 热记忆投影 | 先进入 IKB Source/Knowledge，再按高频规则、当前任务和检索路由生成；不保存唯一知识副本 |
+| 云端记忆 | 跨会话服务投影 | 只同步明确 allowlist 的 Memory Projection，并验证可搜索与召回 |
+| Daily Copilot 小程序 | 个人知识发布端 | 保持独立仓库，消费 IKB Publication Bundle；知识与发布边界见[记忆治理与个人知识发布方案](记忆治理与个人知识发布方案.md) |
 | Obsidian | 人类知识工作台 | 直接打开 Vault；CLI/URI 是可选适配 |
 | knowledge-wiki | 知识分层经验 | 复用渐进式索引、成熟度和引用验证思想 |
 | biz-knownledge | 知识治理经验 | 复用摄入、准入、澄清、冲突、时效契约 |

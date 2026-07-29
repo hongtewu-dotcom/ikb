@@ -291,6 +291,25 @@ export class LedgerStore {
     return event!;
   }
 
+  recordPublicationEvent(
+    releaseId: string,
+    eventType: "publication.built" | "publication.verified" | "publication.approved" | "publication.released" | "publication.withdrawn",
+    payload: EventPayload,
+  ): EventRecord {
+    const normalized = normalizeJsonValue(payload) as EventPayload;
+    const payloadHash = sha256(stableStringify(normalized));
+    let event: EventRecord;
+    this.transact(() => {
+      const events = [...this.events, ...(this.pendingEvents ?? [])];
+      const existing = events.find((candidate) => candidate.aggregateType === "publication"
+        && candidate.aggregateId === releaseId
+        && candidate.eventType === eventType
+        && candidate.payloadHash === payloadHash);
+      event = existing ?? this.appendEventInternal("publication", releaseId, eventType, normalized, null);
+    });
+    return event!;
+  }
+
   recordKnowledgeMigrationEvents(items: Array<{ id: string; payload: EventPayload }>): EventRecord[] {
     const recorded: EventRecord[] = [];
     this.transact(() => {

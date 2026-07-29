@@ -60,9 +60,27 @@ export type KnowledgeQualityIssueCode =
   | "temporal_state_invalid" | "verification_invalid" | "use_when_missing"
   | "use_inputs_missing" | "use_outputs_missing" | "use_steps_missing"
   | "use_checks_missing" | "use_stop_conditions_missing"
+  | "product_type_missing" | "compilation_ref_missing" | "fact_refs_missing"
+  | "questions_answered_missing" | "person_do_not_use_for_missing"
+  | "person_counterevidence_search_missing" | "person_source_count_insufficient"
+  | "person_date_count_insufficient"
   | "person_identity_confidence_missing" | "person_identity_confidence_insufficient"
   | "person_pattern_confidence_missing" | "person_pattern_confidence_insufficient"
-  | "person_episode_count_insufficient" | "person_verification_insufficient";
+  | "person_episode_count_insufficient" | "person_verification_insufficient"
+  | "personal_quality_version_insufficient" | "personal_source_refs_missing"
+  | "personal_admission_reason_missing" | "personal_applicability_missing"
+  | "personal_boundary_missing" | "personal_temporal_state_missing"
+  | "personal_type_unsupported" | "personal_preference_evidence_insufficient"
+  | "personal_goal_verification_insufficient"
+  | "personal_decision_counterevidence_search_missing"
+  | "personal_decision_verification_insufficient"
+  | "personal_playbook_product_type_mismatch"
+  | "personal_playbook_verification_insufficient"
+  | "personal_lesson_episode_missing"
+  | "personal_lesson_verification_insufficient"
+  | "personal_synthesis_fact_refs_insufficient"
+  | "personal_synthesis_verification_insufficient"
+  | "personal_fact_confidence_insufficient";
 
 export interface KnowledgeQualityIssue {
   knowledgeId: string;
@@ -86,6 +104,10 @@ export interface KnowledgeInput {
   derivedFrom?: string[];
   contradicts?: string[];
   qualityVersion?: number;
+  productType?: string;
+  compilationRef?: string;
+  factRefs?: string[];
+  questionsAnswered?: string[];
   admissionReason?: string;
   applicability?: string;
   boundary?: string;
@@ -102,5 +124,10 @@ export interface KnowledgeInput {
   identityConfidence?: KnowledgeConfidence;
   patternConfidence?: KnowledgeConfidence;
   independentEpisodeCount?: number;
+  independentSourceCount?: number;
+  distinctDateCount?: number;
+  counterevidenceRefs?: string[];
+  counterevidenceSearch?: string;
+  doNotUseFor?: string[];
   body: string;
 }

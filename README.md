@@ -13,6 +13,7 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 - [模块边界与保障](docs/模块边界与保障.md)：说明每个 Plane 的真相源、允许依赖、质量门禁和渐进拆分顺序。
 - [知识抽取与人物蒸馏规范](docs/knowledge-extraction.md)：增量输入、周期重建、证据门禁和知识合并规则。
 - [Source Plane 设计](docs/source-plane.md)：大象、Agent 会话、文档和评论如何进入 ikb。
+- [记忆治理与个人知识发布方案](docs/记忆治理与个人知识发布方案.md)：统一 CatPaw/Codex 记忆、IKB Knowledge、云端记忆和 Daily Copilot 的真相源、Git 与发布边界。
 - [执行与治理契约](docs/contracts.md)：Agent、Skill、Harness、状态、权限和产物契约。
 - [Harness 通用经验与评估规范](projects/eval-plane/docs/Harness-通用经验与评估规范.md)：应记录的事件、三层可观测性、12 个确定性 Case 和人工确认的 Outer Loop。
 - [统一 Harness Eval Plane](projects/eval-plane/docs/eval-plane.md)：独立子项目中的版本化 Suite/Case/Result、四类 Adapter、L1 硬门禁和 before/after 回归比较。
@@ -37,13 +38,14 @@ ikb 是个人工作操作系统，不是另一套笔记软件。
 - `ikb-data/ledger/`：Task、Run、Source、Knowledge 变更的可校验事件账本。
 - `ikb-data/runs/`：一次 Task/Agent 执行产生的 Context、草稿和验证证据。
 - `ikb-data/experiences/`：Session Triage 生成的经验记录和跨 Run 的 `pending_review` Knowledge Candidate；不等于正式 Knowledge。
+- `publications/personal/`（目标结构）：经过发布门禁生成的个人知识 Markdown 与 Manifest，可进入 Git；不是第二个可编辑 Vault。
 
 `ikb-data/` 是运行数据目录，已被 Git 忽略；它不是项目文档目录，也不应上传到 GitHub。`examples/` 只放不来自真实工作数据的合成样例。
 
 ## 当前判断
 
 - Obsidian 作为知识工作台，Markdown 才是知识真相源。
-- 真实个人知识与工作知识物理隔离；公开仓只放代码、模板和合成示例。
+- 真实个人知识与工作知识物理隔离；Source、工作知识和个人私有知识不进 Git。经发布门禁生成的个人知识投影可以提交 GitHub，公开仓不保存其私有证据链。
 - Task 控制面负责管理工作，Run 负责记录一次执行，知识库不承载运行状态。
 - 默认只读和草稿模式；大象发送、CR 评论、push、状态修改等外部动作必须过人工门禁。
 - v0.1 先交付本地 CLI；现在补充一个只读本地 HTML 观测页，不承载写操作。任务、运行、审批和产物仍以 CLI/账本为真相源。
@@ -112,6 +114,10 @@ Obsidian 可以直接打开项目内的 `ikb-data/vaults/personal` 或 `ikb-data
 
 落盘前 Core 会拒绝空正文、普通正文中的字面量 `\n`/`\r\n`、缺失来源或准入字段。`knowledge lint` 检查指定条目或整个 Vault，失败返回非零；`doctor` 使用同一套规则检查手工编辑后的存量文件。旧知识仍可读取，但来源型旧 draft 必须补齐当前准入信息才能 verified。
 
+正式个人知识还必须使用 `quality_version >= 4` 并通过类型化准入：偏好、目标、事实、决策、playbook、lesson、synthesis 和人物观察分别有不同的证据与验证条件。旧 personal draft 只作为 advisory，不能直接 verified 或公开发布；统一实现位于 `src/knowledge/personal-admission.ts`。
+
+个人知识公开发布还要经过第二道门。当前 `publish build` 只在私有 `ikb-data/publications/` 生成确定性的 Bundle、Manifest 和渠道输出，不写 Git 目录、不 commit、不 push；work、private、draft、仅 `source_confirmed`、已过期或含内部信息的 Knowledge 会在写发布目录前阻断。`personal-github` 和 `daily-copilot` 两个 Adapter 均已可用；Daily Copilot 还要求传入完整覆盖 legacy ID、分类和附件处置的私有迁移清单。真正的 `publish release` 尚未开放。
+
 ```bash
 ./bin/ikb capture <source-file> --title "标题" --type fact --collection people --scope work --admission-reason "会影响后续判断" --applicability "适用场景" --boundary "不适用场景"
 ./bin/ikb knowledge skip --title "无长期知识" --reason "只有临时进度，没有可复用结论" --source-id <source-id>
@@ -120,6 +126,8 @@ Obsidian 可以直接打开项目内的 `ikb-data/vaults/personal` 或 `ikb-data
 ./bin/ikb knowledge relate <from-id> <to-id> --type derived_from
 ./bin/ikb knowledge relate <from-id> <to-id> --type contradicts
 ./bin/ikb knowledge rebuild --scope work
+./bin/ikb publish build --channel personal-github --knowledge-id <personal-public-verified-id>
+./bin/ikb publish build --channel daily-copilot --migration-manifest <private-migration-manifest.json>
 ./bin/ikb people list --scope work
 ./bin/ikb people add <mis> --mis <mis> --scope work
 ./bin/ikb people update <mis> --name "显示名" --uid <uid> --aliases "别名1,别名2"

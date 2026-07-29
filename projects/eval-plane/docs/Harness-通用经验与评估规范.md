@@ -123,6 +123,8 @@ Context Pack 要有查询意图、来源引用、版本/hash、scope 和使用�
 
 12 个 Case 覆盖：准入/跳过、缺证据、scope、完整质量链、终态不等于质量、Approval 匹配/隔离、恢复幂等/冲突重试、Outer 聚类/不提案，以及原始内容/路径隔离。评估器只读取事件和合成输入，不调用模型或外部观测服务；每个结果包含 `expected / observed / failedInvariants / metrics`。
 
+真实 Work Harness Run 使用独立的 `work-run-quality@v4` 与 `work-harness-run-subject.v4`。L2 与 subject hash 共用单遍 pending-attempt 状态机：每个 `task.verified` 建 pending，identified terminal trigger 到达时按 id 队列消费，early/unmatched、消费后的重复或冲突终态均忽略且 first-wins；匹配摘要按 verification attempt 顺序稳定化，不会用全局去重误删两个真实 attempt。legacy 无 id trigger 保留 FIFO 和物理阶段，晚到且匹配的事件只推进一次缓存代际；节点 retry 与质量 recovery 分开统计。`work-eval-cli --verification-id` 在每次 Subject load/reload 对账 verification document 与 `task.verified`；缓存命中和新报告返回前还要 final reload 并核对 subject hash/key，变化时有界重试且不发布失去绑定的中间报告。同 key 由 evaluation-key 锁串行发布，final reload 后的正常写入窗口由外层 Work Harness task lock 封闭。managed identity 联合 run-state、execution descriptor 和一次解析的 started/handoff 主事件，任何强 ID 都禁止降级并要求 Handoff 五字段一致。新 completion event 显式写 `hardGatePassed` 并与 result/report 对账，只有历史缺字段事件按 result 兼容。native Plan 缺省 scope、canonical path、stale recovery、UNC bundled scope、领域时间和报告文件读取均由确定性代码门禁。v1/v2/v3 报告只保留审计，不能复用为 v4 结论。
+
 第一阶段验收条件：
 
 1. 12/12 Case 可重复运行且结果稳定；负向 Case 必须阻断。

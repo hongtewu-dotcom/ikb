@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { EvalSubject } from "./eval-adapters.ts";
+import { loadWorkDomainEvaluation, type WorkDomainEvaluationSubject } from "./work-domain-evaluation.ts";
+import { resolveWorkExecutionIdentity } from "./work-execution-identity.ts";
+import { workQualityHistory } from "./work-quality-history.ts";
 
-export const WORK_RUN_SUBJECT_VERSION = "work-harness-run-subject.v1";
+export const WORK_RUN_SUBJECT_VERSION = "work-harness-run-subject.v4";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const HANDOFF_STATUSES = new Set(["completed", "blocked", "failed"]);
@@ -42,16 +45,38 @@ export interface WorkNodeSubject {
 export interface WorkEventSubject {
   index: number;
   event: string;
+  verificationId: string | null;
   nodeId: string | null;
   attempt: number | null;
+  executionId: string | null;
+  executionIdPresent: boolean;
   verdict: string | null;
+  suiteId: string | null;
+  evaluationRunId: string | null;
+  evaluationKey: string | null;
+  hardGatePassed: boolean | null;
+  result: string | null;
+  reason: string | null;
+  reportRef: string | null;
+  reused: boolean | null;
   contentHash: string;
+}
+
+interface WorkTerminalTriggerSummary {
+  event: string;
+  verificationId: string | null;
+  suiteId: string | null;
+  evaluationRunId: string | null;
+  hardGatePassed: boolean | null;
+  result: string | null;
+  reason: string | null;
 }
 
 export interface WorkRunSubjectData extends Record<string, unknown> {
   task: {
     taskId: string;
     runId: string;
+    scope: string[];
     acceptanceCount: number;
     allowedSideEffectCount: number;
     maxAgents: number;
@@ -79,8 +104,10 @@ export interface WorkRunSubjectData extends Record<string, unknown> {
   verification: {
     exists: boolean;
     status: string;
+    verificationId: string | null;
     contentHash: string | null;
   };
+  domainEvaluation: WorkDomainEvaluationSubject;
   integrity: {
     valid: boolean;
     reasonCodes: string[];
@@ -106,6 +133,7 @@ export function loadWorkRunSubject(taskDirectory: string): WorkRunSubject {
   const state = readOptionalObject(resolve(taskDir, "run-state.json"), "run_state", reasonCodes);
   const summary = readOptionalObject(resolve(taskDir, "run-summary.json"), "run_summary", reasonCodes);
   const verification = readOptionalObject(resolve(taskDir, "verification.json"), "verification", reasonCodes);
+  const taskScope = scopeArray(task.scope, "task_scope", reasonCodes);
 
   expectSchema(task, "work-harness-task-v1", "task_schema_invalid", reasonCodes);
   expectSchema(plan, "work-harness-plan-v1", "plan_schema_invalid", reasonCodes);
@@ -114,14 +142,20 @@ export function loadWorkRunSubject(taskDirectory: string): WorkRunSubject {
   if (stringValue(plan.task_id) !== taskId || stringValue(state.task_id) !== taskId || stringValue(summary.task_id) !== taskId) reasonCodes.push("task_id_mismatch");
   if (stringValue(summary.run_id) !== runId) reasonCodes.push("run_id_mismatch");
 
-  const nodes = projectNodes(taskDir, plan.nodes, reasonCodes);
   const stateAttempts = numberMap(state.attempts, "run_state_attempts_invalid", reasonCodes);
+  const stateExecutions = objectOrEmpty(state.executions);
+  if (Object.hasOwn(state, "executions") && (typeof state.executions !== "object" || state.executions === null || Array.isArray(state.executions))) {
+    reasonCodes.push("run_state_executions_invalid");
+  }
+  const events = projectEvents(taskDir, reasonCodes);
+  const nodes = projectNodes(taskDir, plan.nodes, taskId, runId, stateExecutions, events, reasonCodes);
   const currentNodes = stringArray(state.current_nodes);
   const completedNodes = stringArray(state.completed_nodes);
   if (!Array.isArray(state.current_nodes)) reasonCodes.push("run_state_current_nodes_invalid");
   if (!Array.isArray(state.completed_nodes)) reasonCodes.push("run_state_completed_nodes_invalid");
 
-  const events = projectEvents(taskDir, reasonCodes);
+  const domainEvaluation = loadWorkDomainEvaluation(taskDir, taskId, runId);
+  reasonCodes.push(...domainEvaluation.reasonCodes);
   const summaryArtifactRefs = stringArray(summary.artifact_refs);
   const summaryArtifactResolution = artifactResolution(taskDir, summaryArtifactRefs);
   const verificationStatus = stringValue(verification.status) ?? "missing";
@@ -137,6 +171,7 @@ export function loadWorkRunSubject(taskDirectory: string): WorkRunSubject {
     task: {
       taskId,
       runId,
+      scope: taskScope,
       acceptanceCount: stringArray(task.acceptance).length,
       allowedSideEffectCount: stringArray(task.allowed_side_effects).length,
       maxAgents,
@@ -164,8 +199,10 @@ export function loadWorkRunSubject(taskDirectory: string): WorkRunSubject {
     verification: {
       exists: Object.keys(verification).length > 0,
       status: verificationStatus,
-      contentHash: documentHash(resolve(taskDir, "verification.json")),
+      verificationId: stringValue(verification.verification_id),
+      contentHash: verificationContentHash(verification),
     },
+    domainEvaluation,
     integrity: {
       valid: reasonCodes.length === 0,
       reasonCodes: unique(reasonCodes),
@@ -175,12 +212,23 @@ export function loadWorkRunSubject(taskDirectory: string): WorkRunSubject {
     adapter: "work-harness",
     runId,
     subjectVersion: WORK_RUN_SUBJECT_VERSION,
-    subjectHash: sha256(stableStringify({ subjectVersion: WORK_RUN_SUBJECT_VERSION, data })),
+    subjectHash: sha256(stableStringify({
+      subjectVersion: WORK_RUN_SUBJECT_VERSION,
+      data: { ...data, events: semanticHashEvents(data.events, runId) },
+    })),
     data,
   };
 }
 
-function projectNodes(taskDir: string, value: unknown, reasonCodes: string[]): WorkNodeSubject[] {
+function projectNodes(
+  taskDir: string,
+  value: unknown,
+  taskId: string,
+  runId: string,
+  executions: Row,
+  events: WorkEventSubject[],
+  reasonCodes: string[],
+): WorkNodeSubject[] {
   if (!Array.isArray(value)) {
     reasonCodes.push("plan_nodes_invalid");
     return [];
@@ -194,14 +242,22 @@ function projectNodes(taskDir: string, value: unknown, reasonCodes: string[]): W
     if (seen.has(id)) reasonCodes.push("node_id_duplicate");
     seen.add(id);
     const kind = stringValue(row.kind) ?? "missing";
-    const handoff = kind === "native-plan-step" ? emptyHandoff() : projectHandoff(taskDir, id, reasonCodes);
+    const handoff = kind === "native-plan-step"
+      ? emptyHandoff()
+      : projectHandoff(taskDir, taskId, runId, id, objectOrEmpty(executions[id]), events, reasonCodes);
+    const readScope = kind === "native-plan-step" && !Object.hasOwn(row, "read_scope")
+      ? []
+      : scopeArray(row.read_scope, "node_read_scope", reasonCodes);
+    const writeScope = kind === "native-plan-step" && !Object.hasOwn(row, "write_scope")
+      ? []
+      : scopeArray(row.write_scope, "node_write_scope", reasonCodes);
     return {
       id,
       kind,
       status: stringValue(row.status) ?? "missing",
       dependsOn: stringArray(row.depends_on),
-      readScope: stringArray(row.read_scope),
-      writeScope: stringArray(row.write_scope),
+      readScope,
+      writeScope,
       dispatchReasons: stringArray(row.dispatch_reasons),
       postConditions: stringArray(row.post_conditions),
       acceptance: stringArray(row.acceptance),
@@ -211,19 +267,47 @@ function projectNodes(taskDir: string, value: unknown, reasonCodes: string[]): W
   });
 }
 
-function projectHandoff(taskDir: string, nodeId: string, reasonCodes: string[]): WorkHandoffSubject {
+function projectHandoff(
+  taskDir: string,
+  taskId: string,
+  runId: string,
+  nodeId: string,
+  execution: Row,
+  events: WorkEventSubject[],
+  reasonCodes: string[],
+): WorkHandoffSubject {
   const path = resolve(taskDir, "nodes", nodeId, "handoff.json");
   const row = readOptionalObject(path, `handoff_${nodeId}`, reasonCodes);
   const exists = Object.keys(row).length > 0;
+  const evidenceValid = exists ? handoffStringArrayValid(row.evidence, "handoff_evidence_invalid", reasonCodes) : false;
+  const artifactsValid = exists ? handoffStringArrayValid(row.artifacts, "handoff_artifacts_invalid", reasonCodes) : false;
+  const validationValid = exists ? handoffStringArrayValid(row.validation, "handoff_validation_invalid", reasonCodes) : false;
+  const risksValid = exists ? handoffStringArrayValid(row.risks, "handoff_risks_invalid", reasonCodes) : false;
+  const identity = resolveWorkExecutionIdentity(taskDir, taskId, runId, nodeId, execution, events, reasonCodes);
+  let identityValid = identity.valid;
+  if (identity.managed) {
+    identityValid = exactHandoffIdentity(row.task_id, taskId, "handoff_task_id_mismatch", reasonCodes) && identityValid;
+    identityValid = exactHandoffIdentity(row.run_id, runId, "handoff_run_id_mismatch", reasonCodes) && identityValid;
+    identityValid = exactHandoffIdentity(row.node_id, nodeId, "handoff_node_id_mismatch", reasonCodes) && identityValid;
+    if (row.attempt !== identity.attempt) {
+      reasonCodes.push("handoff_attempt_mismatch");
+      identityValid = false;
+    }
+    if (row.execution_id !== identity.executionId) {
+      reasonCodes.push("handoff_execution_id_mismatch");
+      identityValid = false;
+    }
+  }
   const artifactRefs = stringArray(row.artifacts);
   const resolution = artifactResolution(taskDir, artifactRefs);
   const valid = exists
     && HANDOFF_STATUSES.has(stringValue(row.status) ?? "")
     && Boolean(stringValue(row.conclusion))
-    && Array.isArray(row.evidence)
-    && Array.isArray(row.artifacts)
-    && Array.isArray(row.validation)
-    && Array.isArray(row.risks)
+    && evidenceValid
+    && artifactsValid
+    && validationValid
+    && risksValid
+    && identityValid
     && Boolean(stringValue(row.next_action));
   return {
     exists,
@@ -239,6 +323,19 @@ function projectHandoff(taskDir: string, nodeId: string, reasonCodes: string[]):
     nextActionPresent: Boolean(stringValue(row.next_action)),
     contentHash: documentHash(path),
   };
+}
+
+function handoffStringArrayValid(value: unknown, reasonCode: string, reasonCodes: string[]): boolean {
+  const valid = Array.isArray(value)
+    && value.every((item) => typeof item === "string" && Boolean(item.trim()));
+  if (!valid) reasonCodes.push(reasonCode);
+  return valid;
+}
+
+function exactHandoffIdentity(value: unknown, expected: string, reasonCode: string, reasonCodes: string[]): boolean {
+  if (value === expected) return true;
+  reasonCodes.push(reasonCode);
+  return false;
 }
 
 function projectEvents(taskDir: string, reasonCodes: string[]): WorkEventSubject[] {
@@ -263,13 +360,23 @@ function projectEvents(taskDir: string, reasonCodes: string[]): WorkEventSubject
         reasonCodes.push("event_contract_invalid");
         continue;
       }
-      if (event.startsWith("evaluation.")) continue;
       events.push({
         index: index + 1,
         event,
+        verificationId: stringValue(row.verification_id),
         nodeId: stringValue(row.node_id),
         attempt: finiteInteger(row.attempt),
+        executionId: stringValue(row.execution_id),
+        executionIdPresent: typeof row.execution_id === "string",
         verdict: stringValue(row.verdict),
+        suiteId: stringValue(row.suite_id),
+        evaluationRunId: stringValue(row.evaluation_run_id),
+        evaluationKey: stringValue(row.evaluation_key),
+        hardGatePassed: booleanValue(row.hard_gate_passed),
+        result: stringValue(row.result),
+        reason: stringValue(row.reason),
+        reportRef: stringValue(row.report_ref),
+        reused: booleanValue(row.reused),
         contentHash: sha256(stableStringify(row)),
       });
     } catch {
@@ -277,6 +384,45 @@ function projectEvents(taskDir: string, reasonCodes: string[]): WorkEventSubject
     }
   }
   return events;
+}
+
+function semanticHashEvents(events: WorkEventSubject[], runId: string): unknown {
+  const attempts = workQualityHistory(events, runId);
+  const matchedTriggerIndexes = new Set(
+    attempts.flatMap((attempt) => attempt.trigger ? [attempt.trigger.index] : []),
+  );
+  const timeline: unknown[] = [];
+  for (const event of events) {
+    if (!event.event.startsWith("evaluation.")) {
+      const {
+        index: _physicalIndex,
+        executionId: _executionId,
+        executionIdPresent: _executionIdPresent,
+        ...semanticEvent
+      } = event;
+      timeline.push(semanticEvent);
+      continue;
+    }
+    if (!event.verificationId && matchedTriggerIndexes.has(event.index)) timeline.push(terminalTriggerSummary(event));
+  }
+  return {
+    timeline,
+    identifiedQualityTriggers: attempts.flatMap((attempt) => (
+      attempt.trigger?.verificationId ? [terminalTriggerSummary(attempt.trigger)] : []
+    )),
+  };
+}
+
+function terminalTriggerSummary(event: WorkEventSubject): WorkTerminalTriggerSummary {
+  return {
+    event: event.event,
+    verificationId: event.verificationId,
+    suiteId: event.suiteId,
+    evaluationRunId: event.evaluationRunId,
+    hardGatePassed: event.hardGatePassed,
+    result: event.result,
+    reason: event.reason,
+  };
 }
 
 function artifactResolution(taskDir: string, references: string[]): { resolved: number; missing: number } {
@@ -341,6 +487,13 @@ function documentHash(path: string): string | null {
   return metadata.isFile() && !metadata.isSymbolicLink() ? sha256(readFileSync(path)) : null;
 }
 
+function verificationContentHash(verification: Row): string | null {
+  if (Object.keys(verification).length === 0) return null;
+  const semantic = { ...verification };
+  delete semantic.evaluation_triggers;
+  return sha256(stableStringify(semantic));
+}
+
 function expectSchema(row: Row, expected: string, reasonCode: string, reasonCodes: string[]): void {
   if (row.schema !== expected) reasonCodes.push(reasonCode);
 }
@@ -363,8 +516,39 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).map((item) => item.trim()) : [];
 }
 
+function scopeArray(value: unknown, label: "task_scope" | "node_read_scope" | "node_write_scope", reasonCodes: string[]): string[] {
+  if (!Array.isArray(value)) {
+    reasonCodes.push(`${label}_invalid`);
+    return [];
+  }
+  const scopes: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      reasonCodes.push(`${label}_invalid`);
+      continue;
+    }
+    const scope = item.trim();
+    scopes.push(scope);
+    if (/[,，]/.test(scope)) reasonCodes.push(`${label}_comma_joined`);
+    if (absolutePathCount(scope) > 1) reasonCodes.push(`${label}_multiple_absolute_paths`);
+  }
+  return scopes;
+}
+
+function absolutePathCount(value: string): number {
+  return value
+    .split(/[\s,，;|=]+/)
+    .map((item) => item.replace(/^[("'\[\{]+/, "").replace(/[)"'\]\}]+$/, ""))
+    .filter((item) => isAbsolute(item) || /^[A-Za-z]:[\\/]/.test(item) || /^\\\\/.test(item))
+    .length;
+}
+
 function finiteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isInteger(value) && Number.isFinite(value) ? value : null;
+}
+
+function booleanValue(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 function numberMap(value: unknown, reasonCode: string, reasonCodes: string[]): Record<string, number> {

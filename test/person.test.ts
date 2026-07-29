@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addKeyPerson } from "../src/people.ts";
-import { buildElephantPersonView, writePersonDossier } from "../src/person.ts";
+import { buildElephantPersonView, writePersonDossier, writePersonDossiers } from "../src/person.ts";
 import { importSourceRecords } from "../src/source.ts";
 import type { SourceMessage } from "../src/types.ts";
 
@@ -82,4 +82,125 @@ test("person dossier aggregates Citadel, review, Elephant and Agent evidence wit
   assert.match(markdown, /Please keep the evidence/);
   assert.match(markdown, /src-dossier-agent/);
   assert.doesNotMatch(markdown, /Must not cross scope/);
+});
+
+test("person dossier keeps creator, owner and modifier attribution separate", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-person-attribution-"));
+  const home = join(sandbox, "ikb-data");
+  const input = join(sandbox, "document.md");
+  writeFileSync(input, "# Architecture\n");
+  addKeyPerson(home, "author", { mis: "author", name: "作者", scope: "work" });
+  addKeyPerson(home, "reviewer", { mis: "reviewer", name: "修改者", scope: "work" });
+  const sourceId = "src-attribution";
+  importSourceRecords(home, input, "# Architecture\n", { kind: "document", adapter: "citadel", scope: "work", title: "架构文档" }, [{
+    id: `${sourceId}:document:1`,
+    sourceId,
+    conversationId: "citadel:1",
+    role: "document",
+    actor: "reviewer",
+    timestamp: "2026-07-16T01:00:00Z",
+    content: "A versioned architecture document.",
+    refs: ["contentId:1", "creator:author", "owner:author", "modifier:reviewer"],
+    participants: ["author", "reviewer"],
+  }], sourceId);
+
+  const author = writePersonDossier(home, "author");
+  assert.deepEqual(author.entries[0]?.attributionKinds, ["creator", "owner"]);
+  assert.equal(author.attributionCounts.creator, 1);
+  assert.equal(author.attributionCounts.owner, 1);
+  assert.equal(author.attributionCounts.modifier, 0);
+
+  const reviewer = writePersonDossier(home, "reviewer");
+  assert.deepEqual(reviewer.entries[0]?.attributionKinds, ["modifier"]);
+  assert.equal(reviewer.attributionCounts.modifier, 1);
+  assert.equal(reviewer.attributionCounts.creator, 0);
+  const markdown = readFileSync(reviewer.path, "utf8");
+  assert.match(markdown, /Attribution: modifier/);
+  assert.doesNotMatch(markdown, /direct attribution or speech/);
+});
+
+test("person dossier shows authored evidence before speech and context when truncated", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-person-priority-"));
+  const home = join(sandbox, "ikb-data");
+  const input = join(sandbox, "records.jsonl");
+  writeFileSync(input, "synthetic\n");
+  addKeyPerson(home, "author", { mis: "author", name: "作者", scope: "work" });
+  const addSource = (sourceId: string, kind: string, records: SourceMessage[]) => importSourceRecords(
+    home,
+    input,
+    `${sourceId}\n`,
+    { kind, adapter: kind === "document" ? "citadel" : "elephant", scope: "work", title: sourceId },
+    records,
+    sourceId,
+  );
+  addSource("src-priority-doc", "document", [{
+    id: "src-priority-doc:1",
+    sourceId: "src-priority-doc",
+    conversationId: "citadel:1",
+    role: "document",
+    actor: "reviewer",
+    timestamp: "2026-07-01T00:00:00Z",
+    content: "Older authored document.",
+    refs: ["creator:author"],
+    participants: ["author"],
+  }]);
+  addSource("src-priority-chat", "elephant", [
+    {
+      id: "src-priority-chat:1",
+      sourceId: "src-priority-chat",
+      conversationId: "gid:1",
+      role: "human",
+      actor: "author",
+      timestamp: "2026-07-22T00:00:00Z",
+      content: "Newer direct speech.",
+      refs: ["senderMis:author"],
+      participants: ["author", "other"],
+    },
+    {
+      id: "src-priority-chat:2",
+      sourceId: "src-priority-chat",
+      conversationId: "gid:1",
+      role: "human",
+      actor: "other",
+      timestamp: "2026-07-23T00:00:00Z",
+      content: "Newest context-only message.",
+      refs: ["senderMis:other"],
+      participants: ["author", "other"],
+    },
+  ]);
+
+  const dossier = writePersonDossier(home, "author", { limit: 1 });
+  assert.equal(dossier.returnedCount, 1);
+  assert.equal(dossier.entries[0]?.content, "Older authored document.");
+  assert.deepEqual(dossier.entries[0]?.attributionKinds, ["creator"]);
+});
+
+test("batch person dossier rebuild scans each normalized Source only once", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-person-batch-"));
+  const home = join(sandbox, "ikb-data");
+  const input = join(sandbox, "document.md");
+  writeFileSync(input, "# Architecture\n");
+  addKeyPerson(home, "author", { mis: "author", name: "作者", scope: "work" });
+  addKeyPerson(home, "reviewer", { mis: "reviewer", name: "修改者", scope: "work" });
+  const sourceId = "src-person-batch";
+  importSourceRecords(home, input, "# Architecture\n", { kind: "document", adapter: "citadel", scope: "work", title: "架构文档" }, [{
+    id: `${sourceId}:document:1`,
+    sourceId,
+    conversationId: "citadel:1",
+    role: "document",
+    actor: "reviewer",
+    timestamp: "2026-07-16T01:00:00Z",
+    content: "A versioned architecture document.",
+    refs: ["contentId:1", "creator:author", "modifier:reviewer"],
+    participants: ["author", "reviewer"],
+  }], sourceId);
+
+  const batch = writePersonDossiers(home, ["author", "reviewer", "author"], { scope: "work" });
+  assert.equal(batch.personCount, 2);
+  assert.equal(batch.sourceCount, 1);
+  assert.equal(batch.sourceReadCount, 1);
+  assert.equal(batch.scannedRecordCount, 1);
+  assert.equal(batch.results.length, 2);
+  assert.deepEqual(batch.results.find((result) => result.person.id === "author")?.entries[0]?.attributionKinds, ["creator"]);
+  assert.deepEqual(batch.results.find((result) => result.person.id === "reviewer")?.entries[0]?.attributionKinds, ["modifier"]);
 });

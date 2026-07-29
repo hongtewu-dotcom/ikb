@@ -54,6 +54,20 @@ test("Knowledge facade has one-way dependencies into cohesive submodules", () =>
   }
 });
 
+test("Publication facade has one-way dependencies into builder, workflow and adapters", () => {
+  const facade = read("src/publication.ts");
+  assert.doesNotMatch(facade, /\bfunction\s+/);
+  assert.match(facade, /publication\/build\.ts/);
+  assert.match(facade, /publication\/workflow\.ts/);
+  assert.equal(existsSync(join(root, "src", "commands", "publication.ts")), true);
+
+  const publicationRoot = join(root, "src", "publication");
+  for (const entry of readdirSync(publicationRoot, { recursive: true }).filter((name) => String(name).endsWith(".ts"))) {
+    const source = readFileSync(join(publicationRoot, String(entry)), "utf8");
+    assert.doesNotMatch(source, /from ["']\.\.\/publication\.ts["']/, `${String(entry)} must not depend on the public facade`);
+  }
+});
+
 test("Source, Candidate, and People command responsibilities stay physically separated", () => {
   for (const path of ["src/commands/source-intake.ts", "src/commands/candidate.ts", "src/commands/people.ts", "src/commands/source-shared.ts"]) {
     assert.equal(existsSync(join(root, path)), true, `${path} must exist`);

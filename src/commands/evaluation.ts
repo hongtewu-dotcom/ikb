@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { EvalReport, EvalResult } from "../../projects/eval-plane/src/eval-contract.ts";
+import { evalPlaneRoot } from "../evaluation-paths.ts";
 
-export function evalPlaneRoot(): string {
-  const ikbRoot = resolve(process.env.IKB_PROJECT_ROOT ?? process.cwd());
-  return resolve(process.env.IKB_EVAL_PLANE_ROOT ?? join(ikbRoot, "projects", "eval-plane"));
-}
+export { evalPlaneRoot };
 
 export function persistEvalReport(home: string, report: EvalReport): { ref: string; path: string; hash: string } {
   const serialized = `${JSON.stringify(report, null, 2)}\n`;

@@ -85,6 +85,20 @@ ikb knowledge rebuild|migrate
 
 验收：改进建议能追溯到真实 Run、Artifact 和 Approval；补丁应用前有 Plan Pack、审批和回滚；同类失败第二次出现时能命中已验证修法；无效果的规则会被识别而不是继续堆叠；Harness 不直接自我修改稳定契约。
 
+## 当前知识效果验收序列
+
+这里的“跑通”同时要求流程正确和产物可用；命令成功、生成文件或通过 schema 校验都不能单独算完成。
+
+| 阶段 | 状态 | 要证明什么 | 退出门禁 |
+|---|---|---|---|
+| R1 冻结回归 | 已完成（2026-07-23） | 已知文档、Agent、业务结构和人物样本经过共性修复后，不再退化成一句话卡片、错误归因或假 Experience | 30/30 case 达到最低可用门槛；0 关键失败；真实 Experience/人物投影可重跑且幂等；完整测试、lint、doctor 和独立 Verifier 通过 |
+| R2 新鲜 Holdout | 下一步 | 抽取规则能泛化到未参与设计的新 Source，而不是只记住 R1 | 先冻结输入和 hash，再盲抽取，最后解封 ground truth；关键失败为 0、case 通过率至少 80%，人物误归因必须为 0 |
+| R3 存量 Knowledge 治理 | 等待 R2 | 现有 Knowledge 与新抽取合同一致，旧短卡、重复卡和失真卡不会同时留在 active Vault | 每条旧知识明确 keep/rebuild/merge/retire；替换关系、引用和生命周期可追溯；人物观察单独确认 |
+| R4 持续增量 Shadow | 等待 R3 | 日常增量能稳定地产生少量高价值分析输入，不把噪声直接发布为知识 | 每日 Source 增量和 Session Triage、每周 Experience 聚类连续运行两周；误选、人工修改和 feedback 可统计；Knowledge 仍保持人工/真实任务门禁 |
+| R5 任务消费闭环 | 等待 R4 | 知识能真正改善文档、评审、CR、编码或沟通任务 | 至少一个低风险工作流连续真实运行 10 次；每次能解释用了什么知识、修改了什么、为何通过；记录 helpful/partial/incorrect |
+
+R1 只证明冻结回归与当前本地投影，不证明泛化。R2 未通过前不批量改写正式 Vault，也不以 Knowledge 数量衡量效果。
+
 ## 推荐的第一条纵向切片
 
 第一条完整切片选“写技术方案”，不先选编码。原因是它能穿透 Knowledge、Task、Run、Agent、Skill、Approval、Artifact 和结果回写八个核心对象，但没有代码执行和外部发送风险。

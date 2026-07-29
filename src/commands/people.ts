@@ -1,7 +1,7 @@
 import { LedgerStore } from "../store.ts";
 import { printValue } from "../format.ts";
 import { rebuildKnowledgeViews } from "../knowledge.ts";
-import { writePersonDossier, type PersonDossierResult } from "../person.ts";
+import { writePersonDossier, writePersonDossiers, type PersonDossierResult } from "../person.ts";
 import { addKeyPerson, listKeyPeople, removeKeyPerson, updateKeyPerson, type KeyPersonInput } from "../people.ts";
 import { type ParsedArgs, optionalOption, outputFormat, requiredArg } from "./shared.ts";
 
@@ -61,12 +61,13 @@ export function handlePeople(store: LedgerStore, home: string, action: string | 
     }
     case "rebuild": {
       const people = listKeyPeople(home, optionalOption(parsed, "scope")).filter((person) => person.enabled);
-      const results = people.map((person) => writePersonDossier(home, person.id, {
-        scope: person.scope,
+      const batch = writePersonDossiers(home, people.map((person) => person.id), {
+        scope: optionalOption(parsed, "scope"),
         from: optionalOption(parsed, "from"),
         to: optionalOption(parsed, "to"),
         limit: optionalOption(parsed, "limit") ? Number(parsed.options.limit) : undefined,
-      }));
+      });
+      const results = batch.results;
       for (const person of results) {
         rebuildKnowledgeViews(home, person.scope);
         store.recordPersonEvent(person.person.id, "person.view_built", {
@@ -75,10 +76,20 @@ export function handlePeople(store: LedgerStore, home: string, action: string | 
           matchedCount: person.matchedCount,
           returnedCount: person.returnedCount,
           sourceIds: person.sources.map((source) => source.sourceId),
+          batch: {
+            personCount: batch.personCount,
+            scopeCount: batch.scopeCount,
+            sourceCount: batch.sourceCount,
+            sourceReadCount: batch.sourceReadCount,
+            scannedRecordCount: batch.scannedRecordCount,
+          },
         });
       }
       if (outputFormat(parsed) === "json") printValue(results, "json");
-      else results.forEach(printPersonDossier);
+      else {
+        console.log(`Person dossier batch: people=${batch.personCount} scopes=${batch.scopeCount} sourceReads=${batch.sourceReadCount} recordsScanned=${batch.scannedRecordCount}`);
+        results.forEach(printPersonDossier);
+      }
       break;
     }
     default:

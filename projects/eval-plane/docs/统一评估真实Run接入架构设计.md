@@ -1,6 +1,6 @@
 # 统一评估真实 Run 接入架构设计
 
-状态：v1 已落地（2026-07-22）
+状态：v1 已落地；Work Harness 跨轮 L2 与通用 L3 投影于 2026-07-23 补齐
 范围：IKB 本地真实 Run、统一 Eval Plane、Run Quality、Observability、Outer Loop
 已落地范围：真实 Run 加载、8 Case Assessment、幂等 Coordinator、Artifact/Event 写回、终态触发、维护补偿和聚合指标
 
@@ -333,6 +333,8 @@ sha256(runId + suiteId + suiteVersion + subjectHash + graderVersion)
 - 已有相同失败结果：允许显式 force 生成新版本，但必须改变 evaluationKey 或 Grader 版本；
 - Subject hash 变化：视为新的评估输入，追加新的 Evaluation Artifact。
 
+Work Run 当前以 `work-run-quality@v4` 和 `work-harness-run-subject.v4` 作为 verification identity、terminal trigger 缓存、stale recovery 区间、managed Handoff 与 UNC scope 完整性的缓存边界。旧 v1/v2/v3 报告和事件索引保留审计，但 Coordinator 必须计算新的 v4 `evaluationKey`，不能复用旧报告。
+
 ## 9. L1/L2/L3 规则边界
 
 ### L1：必须由代码判定
@@ -345,6 +347,8 @@ sha256(runId + suiteId + suiteVersion + subjectHash + graderVersion)
 - Approval 与 Action 的目标/载荷 hash 匹配；
 - Action 身份幂等，无冲突副作用；
 - scope 不越界。
+
+Work Run 的 `native-plan-step` 缺省 scope 投影为空数组，字段存在时仍严格校验。并发 scope 比较按 POSIX/Windows lexical canonical path 处理点段、重复分隔符和根范围；历史 bundled UNC 在 task/read/write 三类 scope 中都产生字段级 reason。`node.stale_recovered` 关闭旧 attempt 的 active 写区间。managed execution 联合 run-state、execution descriptor 与一次解析得到的 started/handoff 主事件判定；任一来源含 `execution_id` 都禁止降级，并把 descriptor/event/Handoff 五字段冲突变成稳定 reason code和 L1/closure 阻断，只有全部来源无 ID 才兼容 legacy。Handoff 四个数组只接受非空字符串。领域报告通过 `O_NOFOLLOW` 打开，并在同一 fd 上完成 `fstat`、读取和 hash。
 
 L1 失败时，hardGatePassed=false，但仍可继续收集其他 Case 结果，方便定位多个问题。
 
@@ -360,12 +364,22 @@ L1 失败时，hardGatePassed=false，但仍可继续收集其他 Case 结果，
 
 L2 不覆盖 L1 的安全结论，也不把重试后的成功解释成首轮成功。
 
+新 `task.verified` 与 `evaluation.trigger_*` 通过 `verification_id` 精确配对，历史无 id 事件按 FIFO 兼容。attempt 通过要求 verification verdict、L1/common closure 和整体结果均通过；optional L3 partial 也不算 final pass。Work Harness 的 `retryRounds` 仅来自节点 attempts，是独立指标，不参与 `firstPass` 或 `recoverySucceeded`；`repairRounds` 只统计未通过的质量 attempt。前一轮 blocked、当前轮 pass 时，报告必须保留 `firstPass=false`、`repairRounds>=1` 和 `recoverySucceeded=true`。
+
+v4 `subjectHash` 与 L2 共用 pending-attempt 单遍状态机：每个 `task.verified` 建 pending，identified terminal trigger 只在到达时消费同 id 队列；early/unmatched 与已消费后的重复或冲突终态同时被 L2 和 hash 忽略，冲突保持 first-wins。匹配摘要按 verification attempt 顺序投影，所以 T2,T1 与 T1,T2 等价；不做全局摘要去重，同 id 的两个真实 attempt 即使得到相同摘要也各自保留。legacy 无 id trigger 继续 FIFO，并在语义时间线中保留物理阶段。摘要只保留 event、verification identity、result、hard gate、reason 与必要的 run/Suite identity，排除时间、evaluationKey、reportRef、reused 和 verification document bookkeeping；晚到且匹配的 trigger 推进一次 key，随后稳定复用。Work Harness 调用 `work-eval-cli --verification-id <id>` 时，Coordinator 在每次 Subject load/reload 都把该 id 与 verification document 及最新 `task.verified` 对账，并在输出回传 verificationId、subjectHash、subjectVersion、suiteVersion；直接 IKB eval 不带该参数时保持兼容。
+
+缓存命中与新评估路径在返回前都执行 bound Subject final reload，对账 verification identity、subject version/hash 和派生 key。变化时旧轮不形成成功返回，最多重新绑定三次；新建中间报告只有 final reload 通过后才能获得完成事件，失配时按原始字节 hash 清理，既有无事件文件保持未索引隔离。final reload 是结果快照的线性化点，per-key 锁保证并发同 key 只有一个发布者；Work Harness 外层 task lock 继续覆盖该点到 stdout 校验和 trigger 落盘，消除受支持 mutator 的残余窗口。绕过锁的直接文件写入无法由 Eval Plane 单方禁止，只能作为线性化点之后的新快照在后续 key 中体现。
+
+Eval Plane 新写入的 `evaluation.completed` 必须显式携带 `hardGatePassed`，并与 result 和报告重算值一致；历史缺字段事件仍按 result 映射读取。显式字段存在但类型错误或与 result/report 冲突时 fail closed，不能命中缓存或驱动 Work Harness 放行。
+
 ### L3：领域结果
 
 - IKB：准入契约、证据强度、scope、Knowledge feedback；
 - SpecX：AC 覆盖率、产物完整性、代码/测试一致性、新鲜度；
 - Pipeline：CaseSpec、步骤一致性、断言有效率、日志验证命中、清理幂等；
 - Work Harness：节点合同、Handoff、并行写范围和执行摘要。
+
+Work Harness 通过 task-dir 下的 `domain-evaluation.json` 接入任意领域 Suite。合同版本固定为 `work-harness-domain-evaluation-v1`，字段统一使用 snake_case，绑定 `task_id/run_id`、Suite/Grader 版本、required、领域结果、报告 `file://` 引用与原始字节 SHA-256、标量 metrics 和 evidence。报告必须是普通非 symlink 文件；身份、文件或 hash 不一致按 subject failure 阻断。未注册仍返回 `not_applicable`；required 领域失败同时令 Eval Report 的 `hardGatePassed=false`。
 
 ## 10. 指标口径
 
@@ -490,9 +504,9 @@ projects/eval-plane/src/
 
 验收：日报能区分评估覆盖、质量通过、首轮通过、最终通过、恢复成功和重复失败。
 
-### Phase 4：外部 Harness 接入（待各领域真实产物契约就绪）
+### Phase 4：外部 Harness 接入（Work Harness 已完成通用合同，其他领域待接）
 
-- Work Harness 读取真实 plan.json、run-state.json 和事件；
+- Work Harness 读取真实 plan.json、run-state.json、事件和可选 `domain-evaluation.json`；
 - SpecX 读取真实变更产物；
 - Pipeline 读取 CaseSpec、断言和清理结果；
 - 保留各领域 Adapter，不把业务判断塞进 IKB Core。
@@ -506,6 +520,9 @@ projects/eval-plane/src/
 - [x] 真实 Approval hash 不匹配时评估失败且不执行副作用。
 - [x] Evaluation Report 注册为 Artifact，并有 run.artifact_linked。
 - [x] 重复评估按 evaluationKey 幂等。
+- [x] Work Harness blocked→pass 能保留跨轮修复指标；bookkeeping-only 评估写回不改变 subjectHash，匹配到 pending attempt 的终态只推进一次缓存代际。
+- [x] Work Harness 通用领域报告绑定 task/run、Suite/Grader、普通文件和 SHA-256。
+- [x] required 领域失败进入 hard gate；未注册领域结果保持 not_applicable。
 - [x] Evaluation Event 只保存摘要、引用、hash 和标量指标。
 - [x] 日报能统计真实 Run 的 evaluation coverage 和 quality pass rate。
 - [x] Outer Loop 能按 Case reason code 聚类，并保持 pending_review。

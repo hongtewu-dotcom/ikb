@@ -54,8 +54,15 @@ export function handleCapture(store: LedgerStore, home: string, source: string |
     sourceKind: optionalOption(parsed, "source-kind") ?? (fromFile ? "document" : "manual"),
     scope: optionalOption(parsed, "scope"),
     sensitivity: optionalOption(parsed, "sensitivity"),
-    sourceRefs: fromFile ? [sourcePath] : optionalOption(parsed, "source") ? [String(parsed.options.source)] : [],
+    sourceRefs: fromFile
+      ? [...new Set([sourcePath, ...splitOptionValues(optionalOption(parsed, "source"))])]
+      : splitOptionValues(optionalOption(parsed, "source")),
     tags: optionalOption(parsed, "tags")?.split(",").filter(Boolean),
+    qualityVersion: optionalOption(parsed, "quality-version") === undefined ? undefined : Number(optionalOption(parsed, "quality-version")),
+    productType: optionalOption(parsed, "product-type"),
+    compilationRef: optionalOption(parsed, "compilation-ref"),
+    factRefs: splitOptionValues(optionalOption(parsed, "fact-refs")),
+    questionsAnswered: splitOptionValues(optionalOption(parsed, "questions-answered")),
     admissionReason: optionalOption(parsed, "admission-reason"),
     applicability: optionalOption(parsed, "applicability"),
     boundary: optionalOption(parsed, "boundary"),
@@ -72,6 +79,11 @@ export function handleCapture(store: LedgerStore, home: string, source: string |
     identityConfidence: optionalOption(parsed, "identity-confidence") as KnowledgeConfidence | undefined,
     patternConfidence: optionalOption(parsed, "pattern-confidence") as KnowledgeConfidence | undefined,
     independentEpisodeCount: optionalOption(parsed, "independent-episode-count") === undefined ? undefined : Number(optionalOption(parsed, "independent-episode-count")),
+    independentSourceCount: optionalOption(parsed, "independent-source-count") === undefined ? undefined : Number(optionalOption(parsed, "independent-source-count")),
+    distinctDateCount: optionalOption(parsed, "distinct-date-count") === undefined ? undefined : Number(optionalOption(parsed, "distinct-date-count")),
+    counterevidenceRefs: splitOptionValues(optionalOption(parsed, "counterevidence-refs")),
+    counterevidenceSearch: optionalOption(parsed, "counterevidence-search"),
+    doNotUseFor: splitOptionValues(optionalOption(parsed, "do-not-use-for")),
   });
   store.recordKnowledgeEvent(record.id, "knowledge.created", knowledgeEventPayload(record));
   printValue(record, outputFormat(parsed));
@@ -294,7 +306,7 @@ function retireKnowledge(store: LedgerStore, home: string, id: string) {
   return record;
 }
 
-function knowledgeEventPayload(record: { path: string; title: string; type: string; collection: string; sourceKind: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[]; aliases: string[]; related: string[]; derivedFrom: string[]; contradicts: string[]; qualityVersion: number; admissionReason: string; applicability: string; boundary: string; useWhen?: string; useInputs?: string[]; useOutputs?: string[]; useSteps?: string[]; useChecks?: string[]; useStopConditions?: string[]; confidence?: string; confidenceBasis?: string[]; temporalState?: string; verification?: string; identityConfidence?: string; patternConfidence?: string; independentEpisodeCount?: number }): Record<string, unknown> {
+function knowledgeEventPayload(record: { path: string; title: string; type: string; collection: string; sourceKind: string; scope: string; status: string; sourceRefs: string[]; validFrom: string; reviewAfter: string; tags: string[]; aliases: string[]; related: string[]; derivedFrom: string[]; contradicts: string[]; qualityVersion: number; productType?: string; compilationRef?: string; factRefs?: string[]; questionsAnswered?: string[]; admissionReason: string; applicability: string; boundary: string; useWhen?: string; useInputs?: string[]; useOutputs?: string[]; useSteps?: string[]; useChecks?: string[]; useStopConditions?: string[]; confidence?: string; confidenceBasis?: string[]; temporalState?: string; verification?: string; identityConfidence?: string; patternConfidence?: string; independentEpisodeCount?: number; independentSourceCount?: number; distinctDateCount?: number; counterevidenceRefs?: string[]; counterevidenceSearch?: string; doNotUseFor?: string[] }): Record<string, unknown> {
   return {
     path: record.path,
     title: record.title,
@@ -312,6 +324,10 @@ function knowledgeEventPayload(record: { path: string; title: string; type: stri
     derivedFrom: record.derivedFrom,
     contradicts: record.contradicts,
     qualityVersion: record.qualityVersion,
+    productType: record.productType,
+    compilationRef: record.compilationRef,
+    factRefs: record.factRefs ?? [],
+    questionsAnswered: record.questionsAnswered ?? [],
     admissionReason: record.admissionReason,
     applicability: record.applicability,
     boundary: record.boundary,
@@ -328,6 +344,11 @@ function knowledgeEventPayload(record: { path: string; title: string; type: stri
     identityConfidence: record.identityConfidence,
     patternConfidence: record.patternConfidence,
     independentEpisodeCount: record.independentEpisodeCount,
+    independentSourceCount: record.independentSourceCount,
+    distinctDateCount: record.distinctDateCount,
+    counterevidenceRefs: record.counterevidenceRefs ?? [],
+    counterevidenceSearch: record.counterevidenceSearch,
+    doNotUseFor: record.doNotUseFor ?? [],
   };
 }
 

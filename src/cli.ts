@@ -5,11 +5,13 @@ import { handleApproval, handleArtifact, handleRun, handleShow, handleTask, hand
 import { handleAgent, handleGate, handleLoop } from "./commands/catalog.ts";
 import { handleHarness } from "./commands/harness-eval.ts";
 import { handleExperience, handleReasoning } from "./commands/analysis.ts";
+import { handleExtraction } from "./commands/extraction.ts";
 import { handleObserveReport } from "./commands/observation.ts";
 import { handleSource } from "./commands/source-intake.ts";
 import { handleCandidate } from "./commands/candidate.ts";
 import { handlePeople } from "./commands/people.ts";
 import { handleCapture, handleContext, handleIngest, handleKnowledge, handleReview, handleSearch } from "./commands/knowledge.ts";
+import { handlePublish } from "./commands/publication.ts";
 import { handleBackup, handleDoctor, handleLedger, handleReport, handleRestore, handleStatus, initializeHome } from "./commands/system.ts";
 import { outputFormat, parseArgs, requiredArg } from "./commands/shared.ts";
 
@@ -30,11 +32,13 @@ Usage:
   ikb harness repair [--suite <suite-id>] [--limit <n>]
   ikb harness patterns [--min-samples <n>]
   ikb experience triage|list|show|cluster|candidate-list|candidate-show
+  ikb extraction validate|verify <results.json> --manifest <benchmark-manifest.json>
+  ikb extraction render <results.json> --manifest <benchmark-manifest.json> --directory <path>
   ikb reasoning run|show [--scope personal|work]
   ikb observe daily|weekly
   ikb approval request|list|show|approve|reject
   ikb artifact add|list|show|open
-  ikb capture <source-file|text> --title <title> [--scope personal|work] [--collection <name>] [--source-kind document|review_comment|manual] [--admission-reason <why>] [--applicability <when>] [--boundary <limits>] [--use-when <trigger>] [--use-inputs <items>] [--use-outputs <items>] [--use-steps <items>] [--use-checks <items>] [--use-stop-conditions <items>] [--confidence low|medium|high] [--confidence-basis <items>] [--temporal-state current|planned|historical|mixed|superseded|unknown] [--verification unverified|source_confirmed|task_validated|user_confirmed] [--identity-confidence low|medium|high] [--pattern-confidence low|medium|high] [--independent-episode-count <n>]
+  ikb capture <source-file|text> --title <title> [--scope personal|work] [--collection <name>] [--source-kind document|review_comment|manual] [--quality-version <n>] [--product-type <type>] [--compilation-ref <path>] [--fact-refs <ids>] [--questions-answered <items>] [--admission-reason <why>] [--applicability <when>] [--boundary <limits>] [--use-when <trigger>] [--use-inputs <items>] [--use-outputs <items>] [--use-steps <items>] [--use-checks <items>] [--use-stop-conditions <items>] [--confidence low|medium|high] [--confidence-basis <items>] [--temporal-state current|planned|historical|mixed|superseded|unknown] [--verification unverified|source_confirmed|task_validated|user_confirmed] [--identity-confidence low|medium|high] [--pattern-confidence low|medium|high] [--independent-episode-count <n>] [--independent-source-count <n>] [--distinct-date-count <n>] [--counterevidence-refs <refs>] [--counterevidence-search <scope>] [--do-not-use-for <items>]
   ikb ingest <markdown-file> [--scope personal|work] [--collection <name>] [--source-kind document|review_comment] [--admission-reason <why>] [--applicability <when>] [--boundary <limits>]
   ikb source ingest <jsonl|markdown-file> --kind elephant|ai_conversation|document|review_comment|artifact|manual [--adapter <name>] [--scope personal|work] [--incremental|--no-incremental] [--source-key <key>]
   ikb source compact-raw [--scope personal|work] [--dry-run]
@@ -62,6 +66,7 @@ Usage:
   ikb knowledge skip --title <title> --reason <why-no-knowledge> --source-id <id> [--record-id <id>] [--scope personal|work]
   ikb knowledge relate <from-id> <to-id> --type related|derived_from|contradicts [--allow-cross-scope]
   ikb knowledge rebuild|migrate [--scope personal|work]
+  ikb publish build [--channel personal-github|daily-copilot] [--knowledge-id <id-or-comma-list>] [--migration-manifest <path>]
   ikb timeline <task-or-run-id>
   ikb doctor
   ikb backup
@@ -128,6 +133,9 @@ async function main(): Promise<void> {
       case "experience":
         handleExperience(store, home, subcommand, args, parsed);
         break;
+      case "extraction":
+        handleExtraction(subcommand, args, parsed);
+        break;
       case "reasoning":
         handleReasoning(store, home, subcommand, parsed);
         break;
@@ -166,6 +174,9 @@ async function main(): Promise<void> {
         break;
       case "knowledge":
         handleKnowledge(store, home, subcommand, args, parsed);
+        break;
+      case "publish":
+        handlePublish(store, home, subcommand, args, parsed);
         break;
       case "timeline":
         handleTimeline(store, subcommand, parsed);

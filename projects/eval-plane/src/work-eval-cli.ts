@@ -19,13 +19,18 @@ function main(): void {
   const taskDir = option(args, "task-dir");
   if (!taskDir) throw new Error("--task-dir is required");
   const suiteId = option(args, "suite") ?? WORK_RUN_QUALITY_SUITE_ID;
+  const verificationId = option(args, "verification-id");
   const projectRoot = resolve(import.meta.dirname, "..");
-  const evaluation = coordinateWorkRunEvaluation(resolve(taskDir), createDefaultEvalRegistry(), { projectRoot, suiteId });
+  const evaluation = coordinateWorkRunEvaluation(resolve(taskDir), createDefaultEvalRegistry(), { projectRoot, suiteId, verificationId });
   console.log(JSON.stringify({
     schema: OUTPUT_SCHEMA,
     status: "completed",
     suiteId: evaluation.report.suiteId,
+    suiteVersion: evaluation.report.suiteVersion,
     runId: evaluation.report.runId,
+    ...(evaluation.verificationId ? { verificationId: evaluation.verificationId } : {}),
+    subjectHash: evaluation.report.subjectHash,
+    subjectVersion: evaluation.report.subjectVersion,
     evaluationKey: evaluation.evaluationKey,
     hardGatePassed: evaluation.report.hardGatePassed,
     result: evaluation.result,

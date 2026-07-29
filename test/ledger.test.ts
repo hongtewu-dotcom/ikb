@@ -105,6 +105,20 @@ test("source ingest events append idempotently for crash reconciliation", () => 
   store.close();
 });
 
+test("publication lifecycle events are idempotent for the same release state", () => {
+  const home = freshHome();
+  const store = new LedgerStore({ home });
+  const payload = { channel: "personal-github", bundleHash: "a".repeat(64), outputHash: "b".repeat(64) };
+  const first = store.recordPublicationEvent("release-test", "publication.built", payload);
+  const repeated = store.recordPublicationEvent("release-test", "publication.built", payload);
+  const changed = store.recordPublicationEvent("release-test", "publication.built", { ...payload, outputHash: "c".repeat(64) });
+  assert.equal(repeated.eventId, first.eventId);
+  assert.notEqual(changed.eventId, first.eventId);
+  assert.equal(store.listEvents().filter((event) => event.aggregateId === "release-test" && event.eventType === "publication.built").length, 2);
+  assert.equal(store.verify().brokenChains.length, 0);
+  store.close();
+});
+
 test("Harness events are typed, redacted and included in the Run snapshot", () => {
   const home = freshHome();
   const store = new LedgerStore({ home, actor: "harness-test" });

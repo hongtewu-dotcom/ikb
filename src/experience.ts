@@ -24,6 +24,8 @@ export type ExperienceSignalCode =
   | "decision_or_rule";
 
 export type ExperienceStatus = "queued" | "analyzed";
+export type ExperienceTriageDisposition = "selected" | "ignored";
+export type ExperienceExclusionReason = "no_semantic_signal_after_filtering" | "source_outside_active_plane";
 export type ExperienceCandidateStatus = "pending_review";
 export type ExperienceAdapter = "claude" | "codex" | "desk" | "elephant";
 export type ExperienceAdapterSelection = ExperienceAdapter | "all";
@@ -46,6 +48,8 @@ export interface ExperienceRecord {
   validationRefs: string[];
   signalCodes: ExperienceSignalCode[];
   signalCounts: Record<ExperienceSignalCode, number>;
+  triageDisposition?: ExperienceTriageDisposition;
+  exclusionReasons?: ExperienceExclusionReason[];
   status: ExperienceStatus;
   firstSeenAt: string;
   lastSeenAt: string;
@@ -106,7 +110,11 @@ export interface TriageResult {
   created: number;
   updated: number;
   unchanged: number;
+  ignoredSessions: number;
+  ignoredUpdated: number;
+  inactiveSourceRecords: number;
   skippedToolRecords: number;
+  skippedNonEventRecords: number;
   unmappedFeedbackEvents: number;
   records: Array<Pick<ExperienceRecord, "id" | "sourceTitle" | "adapter" | "signalCodes" | "runIds" | "status">>;
 }
@@ -148,13 +156,13 @@ const SIGNAL_ORDER: ExperienceSignalCode[] = [
   "decision_or_rule",
 ];
 
-const FAILURE_RE = /(?:\bfail(?:ed|ure)?\b|\berror\b|\bexception\b|\bblocked?\b|\btimeout\b|失败|报错|错误|异常|阻断|超时|不通过|失败路径)/iu;
-const RETRY_RE = /(?:\bre-?try\b|\bre-?run\b|\brerun\b|\brework\b|重试|重跑|再跑|重做|重来)/iu;
-const CORRECTION_RE = /(?:纠正|纠偏|修正|改为|改成|不对|失真|不要.*(?:这样|硬搞|直接)|应该.*(?:而不是|改成)|补充|重写|重新搞|不应该)/iu;
+const FAILURE_RE = /(?:\bfailed\b|\bblocked\b|\btimed?\s*out\b|\bexception\b|\b(?:an?|the)\s+error\b|\berror\s*(?:code|message|[:=]|\d)|(?:当前|本次|刚才|实际|仍然|已经|结果|执行|运行|构建|编译|测试|请求|调用|命令|部署|读取|写入|解析|安装|登录|鉴权|接口|服务|任务|步骤|返回|出现|发生|确认|导致|验收|校验|门禁)[^，。；;\n]{0,20}(?:失败|报错|错误|异常|阻断|超时|不通过|不可用|挂了|找不到|未部署|无权限)|(?:失败|报错|错误|异常|阻断|超时|不通过)[^，。；;\n]{0,12}(?:了|中|原因|根因|发生|出现|返回|导致|当前|本次)|[\w./-]{2,30}\s+失败|(?:错误|异常)(?:码|信息)[:：]?\s*[\w-]+|找不到|未找到|不存在|未部署|无权限|不可用|挂了)/iu;
+const RETRY_RE = /(?:\bretried\b|\bretrying\b|\bre-?ran\b|\brerun(?:ning)?\b|正在重试|再次重试|重试(?:了|后|中|一下|一次)|重新(?:运行|执行|跑|构建|部署)|重跑(?:了|后|中|一下|一次)|再跑一次|重做(?:了|后|一次)|(?:恢复后|稍后|之后|下个[^，。；;\n]{0,8})重试)/iu;
+const CORRECTION_RE = /(?:纠正|纠偏|修正|不对|失真|不要.*(?:这样|硬搞|直接)|应该.*(?:而不是|改成)|重写|重新搞|不应该)/iu;
 const VERIFIER_RE = /(?:\bverifier\b|\bverify\b|验收|校验|质量门禁|\blint\b|\bdoctor\b|验证)/iu;
 const REJECTION_RE = /(?:\breject(?:ed|ion)?\b|\bpartial\b|\bincorrect\b|\bblock(?:ed)?\b|驳回|拒绝|不通过|未通过|阻断)/iu;
 const FIX_RE = /(?:修复|\bfix(?:ed|es)?\b|根因|兼容|回归|幂等|边界|补.*校验|补.*检查|收敛|落地|修好)/iu;
-const DECISION_RE = /(?:明确要求|决定|决策|必须|禁止|只允许|边界|规则|原则|准入|停止条件|采用|不采用|统一|以后(?:都|要)|只查|只能|不得)/iu;
+const DECISION_RE = /(?:我(?:们)?决定|已决定|确认采用|最终采用|最终方案|后续(?:都|统一)|以后(?:都|要)|统一(?:使用|改为|按|收口)|明确要求|禁止|不得|不允许|只允许|只能|只读|不采用|准入(?:标准|条件)|停止条件)/iu;
 
 export function triageSessions(home: string, store: LedgerStore, options: TriageOptions = {}): TriageResult {
   const scope = options.scope ?? "all";
@@ -168,6 +176,7 @@ export function triageSessions(home: string, store: LedgerStore, options: Triage
     .sort((left, right) => left.importedAt.localeCompare(right.importedAt));
   const events = store.listEvents();
   const eventIndex = buildEventIndex(events);
+  const existingById = new Map(listExperienceRecords(home).map((record) => [record.id, record]));
   const sessions = new Map<string, SessionAccumulator>();
   let skippedToolRecords = 0;
   for (const source of sources) {
@@ -192,16 +201,20 @@ export function triageSessions(home: string, store: LedgerStore, options: Triage
   }
 
   const selected: ExperienceRecord[] = [];
+  const ignored: ExperienceRecord[] = [];
+  let skippedNonEventRecords = 0;
   for (const session of sessions.values()) {
     const triaged = triageSession(session, eventIndex);
-    if (!triaged.signalCodes.length) continue;
-    selected.push(triaged);
+    skippedNonEventRecords += triaged.skippedNonEventRecords;
+    if (triaged.record.triageDisposition === "selected") selected.push(triaged.record);
+    else ignored.push(triaged.record);
   }
   selected.sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt) || left.id.localeCompare(right.id));
   const limited = selected.slice(0, limit);
   let created = 0;
   let updated = 0;
   let unchanged = 0;
+  let ignoredUpdated = 0;
   const records: TriageResult["records"] = [];
   for (const record of limited) {
     const outcome = writeExperienceRecord(home, record);
@@ -214,6 +227,41 @@ export function triageSessions(home: string, store: LedgerStore, options: Triage
     } else unchanged += 1;
     records.push({ id: record.id, sourceTitle: record.sourceTitle, adapter: record.adapter, signalCodes: record.signalCodes, runIds: record.runIds, status: record.status });
   }
+  for (const record of ignored) {
+    if (!existingById.has(record.id)) continue;
+    const outcome = writeExperienceRecord(home, record);
+    if (outcome === "updated") {
+      ignoredUpdated += 1;
+      store.recordExperienceEvent(record.id, "experience.ignored", experienceEventPayload(record));
+    }
+  }
+  const activeSourceIds = new Set(sources.map((source) => source.id));
+  const activeSessionIds = new Set([...selected, ...ignored].map((record) => record.id));
+  const inactiveRecords = options.from === undefined && options.to === undefined
+    ? [...existingById.values()].filter((record) => (
+      (scope === "all" || record.scope === scope)
+      && (adapter === "all" || record.adapter === adapter)
+      && !activeSessionIds.has(record.id)
+      && record.sourceIds.length > 0
+      && record.sourceIds.every((sourceId) => !activeSourceIds.has(sourceId))
+    ))
+    : [];
+  for (const existing of inactiveRecords) {
+    const record: ExperienceRecord = {
+      ...existing,
+      evidenceRecordIds: [],
+      signalCodes: [],
+      signalCounts: emptySignalCounts(),
+      triageDisposition: "ignored",
+      exclusionReasons: ["source_outside_active_plane"],
+      updatedAt: new Date().toISOString(),
+    };
+    const outcome = writeExperienceRecord(home, record);
+    if (outcome === "updated") {
+      ignoredUpdated += 1;
+      store.recordExperienceEvent(record.id, "experience.ignored", experienceEventPayload(record));
+    }
+  }
   const unmappedFeedbackEvents = eventIndex.unmappedFeedbackEvents;
   return {
     schema: TRIAGE_VERSION,
@@ -225,7 +273,11 @@ export function triageSessions(home: string, store: LedgerStore, options: Triage
     created,
     updated,
     unchanged,
+    ignoredSessions: ignored.length,
+    ignoredUpdated,
+    inactiveSourceRecords: inactiveRecords.length,
     skippedToolRecords,
+    skippedNonEventRecords,
     unmappedFeedbackEvents,
     records,
   };
@@ -264,6 +316,7 @@ export function clusterExperienceRecords(home: string, store: LedgerStore, optio
   if (!Number.isInteger(minimumSamples) || minimumSamples < 2) throw new Error("Experience cluster minimumSamples must be an integer >= 2");
   const activeSourceIds = new Set(listSources(home).map((source) => source.id));
   const records = listExperienceRecords(home, scope === "all" ? undefined : scope)
+    .filter((record) => record.triageDisposition !== "ignored")
     .filter((record) => record.sourceIds.length === 0 || record.sourceIds.every((sourceId) => activeSourceIds.has(sourceId)));
   const groups = new Map<string, ExperienceRecord[]>();
   for (const record of records) {
@@ -343,15 +396,21 @@ interface EventIndex {
   unmappedFeedbackEvents: number;
 }
 
-function triageSession(session: SessionAccumulator, eventIndex: EventIndex): ExperienceRecord {
+function triageSession(session: SessionAccumulator, eventIndex: EventIndex): { record: ExperienceRecord; skippedNonEventRecords: number } {
   const signalCounts = emptySignalCounts();
   const evidenceRecordIds: string[] = [];
   const evidenceEventIds = new Set<string>();
+  const automatedPromptOnly = isAutomatedPromptOnlySession(session.records);
+  let skippedNonEventRecords = 0;
   for (const record of session.records) {
-    const content = record.content ?? "";
+    const content = automatedPromptOnly ? null : signalContent(record);
+    if (content === null) {
+      skippedNonEventRecords += 1;
+      continue;
+    }
     const human = isHumanRecord(record);
     let found = false;
-    if (FAILURE_RE.test(content)) found = increment(signalCounts, "failure_or_block");
+    if (hasFailureSignal(content)) found = increment(signalCounts, "failure_or_block");
     if (RETRY_RE.test(content)) found = increment(signalCounts, "retry");
     if (human && CORRECTION_RE.test(content)) found = increment(signalCounts, "manual_correction");
     if (VERIFIER_RE.test(content) && REJECTION_RE.test(content)) found = increment(signalCounts, "verifier_rejection");
@@ -372,31 +431,37 @@ function triageSession(session: SessionAccumulator, eventIndex: EventIndex): Exp
     if (isRelevantEvent(event) && evidenceEventIds.size < 100) evidenceEventIds.add(event.eventId);
   }
   const signalCodes = SIGNAL_ORDER.filter((code) => signalCounts[code] > 0);
+  const triageDisposition: ExperienceTriageDisposition = signalCodes.length > 0 ? "selected" : "ignored";
   const sourceOriginHash = sha256([...session.sourceOriginHashes].sort().join("|"));
   const id = `exp-${sha256(session.sessionKey).slice(0, 12)}`;
   const now = new Date().toISOString();
   return {
-    schema: EXPERIENCE_VERSION,
-    id,
-    scope: session.scope,
-    adapter: session.adapter,
-    sourceTitle: [...session.sourceTitles].sort()[0] ?? "未命名会话",
-    sourceIds,
-    sourceOriginHash,
-    sessionKeyHash: sha256(session.sessionKey).slice(0, 32),
-    conversationIdHash: sha256(session.conversationId).slice(0, 32),
-    sourceRecordIds: [...session.sourceRecordIds].sort(),
-    evidenceRecordIds: unique(evidenceRecordIds),
-    evidenceEventIds: [...evidenceEventIds].sort(),
-    runIds,
-    validationRefs,
-    signalCodes,
-    signalCounts,
-    status: "queued",
-    firstSeenAt: session.firstSeenAt,
-    lastSeenAt: session.lastSeenAt,
-    createdAt: now,
-    updatedAt: now,
+    record: {
+      schema: EXPERIENCE_VERSION,
+      id,
+      scope: session.scope,
+      adapter: session.adapter,
+      sourceTitle: [...session.sourceTitles].sort()[0] ?? "未命名会话",
+      sourceIds,
+      sourceOriginHash,
+      sessionKeyHash: sha256(session.sessionKey).slice(0, 32),
+      conversationIdHash: sha256(session.conversationId).slice(0, 32),
+      sourceRecordIds: [...session.sourceRecordIds].sort(),
+      evidenceRecordIds: triageDisposition === "selected" ? unique(evidenceRecordIds) : [],
+      evidenceEventIds: [...evidenceEventIds].sort(),
+      runIds,
+      validationRefs,
+      signalCodes: triageDisposition === "selected" ? signalCodes : [],
+      signalCounts: triageDisposition === "selected" ? signalCounts : emptySignalCounts(),
+      triageDisposition,
+      exclusionReasons: triageDisposition === "ignored" ? ["no_semantic_signal_after_filtering"] : [],
+      status: "queued",
+      firstSeenAt: session.firstSeenAt,
+      lastSeenAt: session.lastSeenAt,
+      createdAt: now,
+      updatedAt: now,
+    },
+    skippedNonEventRecords,
   };
 }
 
@@ -574,6 +639,8 @@ function experienceEventPayload(record: ExperienceRecord): Record<string, unknow
     evidenceRecordIds: record.evidenceRecordIds.slice(0, 100),
     evidenceEventIds: record.evidenceEventIds.slice(0, 100),
     signalCodes: record.signalCodes,
+    triageDisposition: record.triageDisposition ?? "selected",
+    exclusionReasons: record.exclusionReasons ?? [],
     runIds: record.runIds,
   };
 }
@@ -615,12 +682,73 @@ function stableSessionKey(source: SourceRecord, conversationId: string): string 
 
 function isToolRecord(record: SourceMessage): boolean {
   const role = `${record.role}|${record.actor}`.toLowerCase();
-  return Boolean(record.role === "tool" || /(?:^|[|:_-])tool(?:$|[|:_-])/.test(role) || role.includes("tool_result") || role.includes("function_call"));
+  const content = String(record.content ?? "").trim();
+  return Boolean(
+    record.role === "tool"
+    || /(?:^|[|:_-])tool(?:$|[|:_-])/.test(role)
+    || role.includes("tool_result")
+    || role.includes("function_call")
+    || /^\[external_agent_tool_(?:call|result)\b/iu.test(content)
+    || /^<EXTERNAL SESSION IMPORTED>/iu.test(content)
+  );
 }
 
 function isHumanRecord(record: SourceMessage): boolean {
   const role = `${record.role}|${record.actor}`.toLowerCase();
   return /(?:^|[|:_-])(?:user|human|reviewer|owner|customer)(?:$|[|:_-])/.test(role) || record.role === "user" || record.role === "human";
+}
+
+function signalContent(record: SourceMessage): string | null {
+  const content = stripLeadingRuntimeContext(String(record.content ?? ""));
+  if (!content) return null;
+  if (isHumanRecord(record) && looksLikeDelegatedPrompt(content)) return null;
+  return content;
+}
+
+function hasFailureSignal(content: string): boolean {
+  const buildNormalized = /\bBUILD SUCCESS\b/iu.test(content) ? content.replace(/\[ERROR\]/giu, "") : content;
+  const withoutExplicitNegations = buildNormalized
+    .replace(/失败后/gu, "之后")
+    .replace(/\b(?:after|on)\s+(?:a\s+)?failure\b/giu, "")
+    .replace(/((?:如果|若|假如|一旦|当)[^，。；;\n]{0,40})(?:失败|错误|异常|报错|阻断|超时)/giu, "$1")
+    .replace(/(?:没有|未|无|不存在|非|不是|并非)[^，。；;\n]{0,16}(?:错误|异常|失败|报错|阻断|超时|不通过|冲突)/giu, "")
+    .replace(/(?:did\s+not|didn't|has\s+not|hasn't|have\s+not|haven't|no|without)\s+(?:any\s+)?(?:errors?|exceptions?|failures?|timeouts?|blocks?)/giu, "");
+  return FAILURE_RE.test(withoutExplicitNegations);
+}
+
+function stripLeadingRuntimeContext(value: string): string {
+  let result = value.trim();
+  let previous = "";
+  while (result !== previous) {
+    previous = result;
+    result = result
+      .replace(/^<sandbox_context\b[^>]*\/>\s*/iu, "")
+      .replace(/^<(sandbox_context|memory_context|attachment_context)\b[^>]*>[\s\S]*?<\/\1>\s*/iu, "")
+      .trim();
+  }
+  return result;
+}
+
+function looksLikeDelegatedPrompt(content: string): boolean {
+  const text = content.trim();
+  if (/^<automation_context\b/iu.test(text)) return true;
+  if (/^#\s*System(?:\s|$)/iu.test(text)) return true;
+  if (/^#\s*知识质量(?:第.+轮)?检查/iu.test(text)) return true;
+  if (/^#\s*OpenSpec\b/iu.test(text) && /输出格式|产出\s*`?prd_/iu.test(text)) return true;
+  if (/^You are running as a local coding agent\b/iu.test(text) && /assigned issue ID|Start by running/iu.test(text)) return true;
+  if (/^<SystemPrompt>/iu.test(text) || /<SystemPrompt>[\s\S]*(?:MULTICA_AGENT_ID|assigned issue ID)/iu.test(text)) return true;
+  if (/^用户提供了[\s\S]{0,1000}请你[:：]/iu.test(text)) return true;
+  const assignedRole = /^(?:你是)\s*[^。\n]{0,120}(?:(?:助手|引擎|评审员|分析员|总管)(?:[，。；：:\s]|$)|(?:agent|judge|expert)\b)/iu.test(text)
+    || /^(?:You are)\s*[^.\n]{0,120}(?:agent|assistant|judge|expert)\b/iu.test(text);
+  return assignedRole && /(?:输出|报告|调用方式|只读|只输出|input|prompt|格式|步骤)/iu.test(text);
+}
+
+function isAutomatedPromptOnlySession(records: SourceMessage[]): boolean {
+  const humanContents = records
+    .filter(isHumanRecord)
+    .map((record) => stripLeadingRuntimeContext(String(record.content ?? "")))
+    .filter(Boolean);
+  return humanContents.length > 0 && humanContents.every(looksLikeDelegatedPrompt);
 }
 
 function extractSourceIds(value: unknown): string[] {
@@ -663,6 +791,8 @@ function isExperienceRecord(value: unknown): value is ExperienceRecord {
   return row.schema === EXPERIENCE_VERSION && typeof row.id === "string" && /^exp-[A-Za-z0-9]+$/.test(row.id)
     && (row.scope === "personal" || row.scope === "work") && Array.isArray(row.sourceIds) && Array.isArray(row.signalCodes)
     && Array.isArray(row.runIds) && Array.isArray(row.evidenceRecordIds) && Array.isArray(row.evidenceEventIds)
+    && (row.triageDisposition === undefined || row.triageDisposition === "selected" || row.triageDisposition === "ignored")
+    && (row.exclusionReasons === undefined || Array.isArray(row.exclusionReasons))
     && typeof row.createdAt === "string" && typeof row.updatedAt === "string";
 }
 
