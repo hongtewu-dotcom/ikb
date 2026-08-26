@@ -8,7 +8,7 @@
 | 本地首次 clone | 2026-08-06 13:04:46 +0800 |
 | 抽取前 HEAD | `fc648d96b1535888d6ce62a12f935f33715434cc` |
 | 抽取日期 | 2026-08-26 |
-| 抽取目标 | `/Users/htwu/projects/ikb/projects/agent-team` |
+| 抽取目标 | `/Users/htwu/projects/_personal/ikb/projects/agent-team` |
 | 原仓库处置 | 已压缩归档到 `/Users/htwu/Archives/agent-team/wshobson-agents-20260826.tar.gz`；废纸篓展开副本已删除 |
 | 归档 SHA-256 | `be92c685382279f8dfac57c258f21b976d5cb2e09c8656fba2d16c697afa9655` |
 | 归档校验 | gzip 完整性通过；源目录与归档均为 10,456 个条目；4 个关键文件逐字节一致 |
@@ -43,4 +43,4 @@
 
 新任务 canary 使用 Luna low、read-only、ephemeral 模式，只读取启动时注入的 Skill 清单，没有调用工具。
 
-后续开发只使用 `/Users/htwu/projects/ikb/projects/agent-team`。归档仅用于历史比对；如确需读取，解压到临时目录，禁止从中注册 marketplace、安装插件或恢复全局软链接。
+后续开发只使用 `/Users/htwu/projects/_personal/ikb/projects/agent-team`。归档仅用于历史比对；如确需读取，解压到临时目录，禁止从中注册 marketplace、安装插件或恢复全局软链接。

@@ -10,7 +10,7 @@ Agent Team 是 IKB 下的独立实验项目，用来迭代 Codex 原生子 Agent
 - 原薄 Fork 已压缩归档到 `/Users/htwu/Archives/agent-team/wshobson-agents-20260826.tar.gz`，只作历史取证，不再作为安装源。
 - Codex 候选包物理上只包含 delegate、feature、review 三个 Skill；上游 Claude-first Skill、command 和 agent 不进入候选包。
 - 不打包自定义 Agent、不固定子 Agent 模型、不注册 Hook，也不创建全局 Skill 软链接。
-- 23 项项目测试、候选包结构校验和 Codex 插件校验已通过。
+- 25 项项目测试、候选包结构校验和 Codex 插件校验已通过。
 - 首轮 A/B 证明候选能抑制一个短来源误拆场景；真正并行审计没有性能优势，因此当前定位仍是受控试用。
 - 已安装 `agent-teams@ikb-agent-team` 2.0.0；新任务只发现三个入口，单文件 canary 为 0 spawn。
 
@@ -34,7 +34,7 @@ agent-team/
 ## 验证
 
 ```bash
-cd /Users/htwu/projects/ikb/projects/agent-team
+cd /Users/htwu/projects/_personal/ikb/projects/agent-team
 make test
 make validate-codex
 ```
@@ -45,7 +45,7 @@ make validate-codex
 make generate-pi
 ```
 
-Codex 生成结果位于 `dist/codex-marketplace/`。生成不等于安装；安装、真实新任务 canary 和回滚状态必须分开报告。
+Codex 生成结果位于 `dist/codex-marketplace/`。`make validate-codex` 会先清理旧版遗留的项目级 `.codex/` 发现树，避免源码目录重复加载 Claude-first Skill。生成不等于安装；安装、真实新任务 canary 和回滚状态必须分开报告。
 
 2.0.0 的源码、artifact hash、安装路径和 canary 见 [发布记录](docs/releases/2.0.0.md)。
 

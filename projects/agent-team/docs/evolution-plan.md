@@ -3,7 +3,7 @@ type: design
 topic: Codex Agent Team 2.0 演进方案
 status: installed-controlled-canary-passed
 date: 2026-08-26
-source_root: /Users/htwu/projects/ikb/projects/agent-team
+source_root: /Users/htwu/projects/_personal/ikb/projects/agent-team
 ---
 
 # Codex Agent Team 2.0 演进方案
@@ -16,7 +16,7 @@ Agent Team 值得作为受控实验安装，但只做一层薄治理：让 Codex
 
 | 项目 | 决策 |
 |---|---|
-| 唯一源码 | `/Users/htwu/projects/ikb/projects/agent-team` |
+| 唯一源码 | `/Users/htwu/projects/_personal/ikb/projects/agent-team` |
 | Codex 执行面 | 原生 `spawn_agent`、`followup_task`、`send_message`、`wait_agent`、`interrupt_agent` |
 | Codex 公开入口 | `agent-team-delegate`、`agent-team-feature`、`agent-team-review` |
 | 自定义 Agent | 不打包；reader 使用内置 `explorer`，writer 使用内置 `worker` |

@@ -423,12 +423,12 @@ PYTHONDONTWRITEBYTECODE=1 uv run pytest -p no:cacheprovider -q \
 
 ## 十二、证据索引
 
-- [Codex plugin manifest](/Users/htwu/projects/ikb/projects/agent-team/plugins/agent-teams/.codex-plugin/plugin.json)
-- [agent-team README 与原生生命周期边界](/Users/htwu/projects/ikb/projects/agent-team/plugins/agent-teams/README.md)
-- [team-delegate 当前合同](/Users/htwu/projects/ikb/projects/agent-team/plugins/agent-teams/commands/team-delegate.md)
-- [Claude 专属 team composition](/Users/htwu/projects/ikb/projects/agent-team/plugins/agent-teams/skills/team-composition-patterns/SKILL.md)
-- [Claude 专属 communication protocol](/Users/htwu/projects/ikb/projects/agent-team/plugins/agent-teams/skills/team-communication-protocols/SKILL.md)
-- [Codex 目标测试](/Users/htwu/projects/ikb/projects/agent-team/tools/tests/test_agent_teams_codex.py)
+- [Codex plugin manifest](/Users/htwu/projects/_personal/ikb/projects/agent-team/plugins/agent-teams/.codex-plugin/plugin.json)
+- [agent-team README 与原生生命周期边界](/Users/htwu/projects/_personal/ikb/projects/agent-team/plugins/agent-teams/README.md)
+- [team-delegate 当前合同](/Users/htwu/projects/_personal/ikb/projects/agent-team/plugins/agent-teams/commands/team-delegate.md)
+- [Claude 专属 team composition](/Users/htwu/projects/_personal/ikb/projects/agent-team/plugins/agent-teams/skills/team-composition-patterns/SKILL.md)
+- [Claude 专属 communication protocol](/Users/htwu/projects/_personal/ikb/projects/agent-team/plugins/agent-teams/skills/team-communication-protocols/SKILL.md)
+- [Codex 目标测试](/Users/htwu/projects/_personal/ikb/projects/agent-team/tools/tests/test_agent_teams_codex.py)
 - [旧版治理设计及单题 A/B](/Users/htwu/projects/_workspace-misc/docs/agent/codex-main-subagent-governance-design.md)
 - [历史 Hook 死循环修复记录](/Users/htwu/.catpaw/memory/archive/agent-spawn-contract-superseded-20260825.md)
 - [缺失 context_guard.py 阻断业务排查记录](/Users/htwu/.codex/memories/rollout_summaries/2026-08-24T09-36-24-sf1k-datamining_610_647_pledge_npe_root_cause.md)

@@ -27,7 +27,7 @@ adapters/codex/skills/
 ## 构建与验证
 
 ```bash
-cd /Users/htwu/projects/ikb/projects/agent-team
+cd /Users/htwu/projects/_personal/ikb/projects/agent-team
 make test
 make validate-codex
 python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py \

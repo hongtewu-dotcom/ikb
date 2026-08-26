@@ -30,7 +30,10 @@ from tools.adapters.capabilities import supported_harnesses
 # Per-harness output targets used by both `--clean` and `--prune`.
 _HARNESS_TARGETS = {
     # AGENTS.md is the committed canonical context file — never delete it from clean.
-    "codex": ["dist/codex-marketplace"],
+    # `.codex/` is a legacy generated discovery tree from the pre-2.0 adapter.
+    # Leaving it behind makes source-directory Codex tasks load Claude-first skills
+    # beside the minimal marketplace package, so a Codex clean must retire it too.
+    "codex": ["dist/codex-marketplace", ".codex"],
     "cursor": [".cursor", ".cursor-plugin"],
     "opencode": [".opencode", "opencode.json"],
     "gemini": ["commands", "agents", "skills"],

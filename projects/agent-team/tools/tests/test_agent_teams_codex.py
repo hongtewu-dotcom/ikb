@@ -10,6 +10,7 @@ import pytest
 
 from tools.adapters.base import load_plugin, parse_frontmatter
 from tools.adapters.codex import CodexAdapter
+from tools.generate import clean_output
 
 
 APPROVED_SKILLS = {
@@ -65,6 +66,30 @@ def _tree_digest(root: Path) -> dict[str, str]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
+
+
+def test_codex_clean_removes_legacy_project_discovery_outputs(tmp_path: Path):
+    legacy_skill = tmp_path / ".codex" / "skills" / "legacy-team" / "SKILL.md"
+    legacy_skill.parent.mkdir(parents=True)
+    legacy_skill.write_text("legacy\n", encoding="utf-8")
+    candidate = (
+        tmp_path
+        / "dist"
+        / "codex-marketplace"
+        / "plugins"
+        / "agent-teams"
+        / "LICENSE"
+    )
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("candidate\n", encoding="utf-8")
+
+    assert clean_output("codex", tmp_path) == 2
+    assert not (tmp_path / ".codex").exists()
+    assert not (tmp_path / "dist" / "codex-marketplace").exists()
+
+
+def test_active_source_has_no_project_local_codex_discovery_tree():
+    assert not (Path(__file__).parents[2] / ".codex").exists()
 
 
 def test_candidate_physically_contains_only_approved_skills(generated_plugin: Path):
