@@ -1,7 +1,7 @@
 ---
 type: design
 topic: Codex Agent Team 2.0 演进方案
-status: candidate-validated-install-pending
+status: installed-controlled-canary-passed
 date: 2026-08-26
 source_root: /Users/htwu/projects/ikb/projects/agent-team
 ---
@@ -134,6 +134,7 @@ plugins/agent-teams/
 - `make validate-codex`：6 files，0 warning，0 error。
 - Codex 插件本地校验器：通过。
 - 隔离 `CODEX_HOME`：CLI 能注册 marketplace，并把 `agent-teams@ikb-agent-team` 2.0.0 安装为只含三个 Skill 的缓存包。
+- 默认 Codex 已安装 2.0.0；全新任务 `01a03d49-2f46-7aa0-97dd-87cb3ba7d9f4` 只发现三个入口，单文件路径为 0 collaboration 调用。
 
 ### 行为验证
 

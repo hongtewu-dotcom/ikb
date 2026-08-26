@@ -1,6 +1,6 @@
 # Agent Team
 
-Agent Team 是 IKB 下的独立实验项目，用来迭代 Codex 原生子 Agent 的委派判断、分支合同、Writer/Review Barrier 和最终验收。2.0.0 候选包已经通过静态验证和首轮行为 A/B，**尚未安装到默认 Codex**。
+Agent Team 是 IKB 下的独立实验项目，用来迭代 Codex 原生子 Agent 的委派判断、分支合同、Writer/Review Barrier 和最终验收。2.0.0 已通过静态验证、首轮行为 A/B 和全新任务 canary，当前作为**受控试用插件**安装在默认 Codex。
 
 它不是新的 Agent Runtime。创建、通信、等待和终止继续由 Codex 原生能力负责；本项目只维护可审查的 Skill、Agent、适配器和评测。
 
@@ -12,6 +12,7 @@ Agent Team 是 IKB 下的独立实验项目，用来迭代 Codex 原生子 Agent
 - 不打包自定义 Agent、不固定子 Agent 模型、不注册 Hook，也不创建全局 Skill 软链接。
 - 23 项项目测试、候选包结构校验和 Codex 插件校验已通过。
 - 首轮 A/B 证明候选能抑制一个短来源误拆场景；真正并行审计没有性能优势，因此当前定位仍是受控试用。
+- 已安装 `agent-teams@ikb-agent-team` 2.0.0；新任务只发现三个入口，单文件 canary 为 0 spawn。
 
 现行设计见 [Agent Team 独立演进方案](docs/evolution-plan.md)；迁移前的问题审计保留在 [历史审计](docs/audit-20260826-pre-migration.md)，只作证据，不再约束当前实现。
 
@@ -45,6 +46,8 @@ make generate-pi
 ```
 
 Codex 生成结果位于 `dist/codex-marketplace/`。生成不等于安装；安装、真实新任务 canary 和回滚状态必须分开报告。
+
+2.0.0 的源码、artifact hash、安装路径和 canary 见 [发布记录](docs/releases/2.0.0.md)。
 
 ## 上游与许可证
 
