@@ -134,7 +134,7 @@ plugins/agent-teams/
 - `make validate-codex`：6 files，0 warning，0 error。
 - Codex 插件本地校验器：通过。
 - 隔离 `CODEX_HOME`：CLI 能注册 marketplace，并把 `agent-teams@ikb-agent-team` 2.0.0 安装为只含三个 Skill 的缓存包。
-- 默认 Codex 已安装 2.0.0；全新任务 `01a03d49-2f46-7aa0-97dd-87cb3ba7d9f4` 只发现三个入口，单文件路径为 0 collaboration 调用。
+- 默认 Codex 已安装 2.0.0；从只读发布快照重装后的全新任务 `01a03d4d-07bb-7451-b798-5cd6b1675e07` 只发现三个入口，单文件路径为 0 collaboration 调用。
 
 ### 行为验证
 
@@ -149,7 +149,7 @@ plugins/agent-teams/
 
 ## 发布与回滚
 
-发布只安装 `dist/codex-marketplace` 的固定 2.0.0，不指向活跃源码。记录源码 commit、候选包 hash、CLI 安装路径和新任务 thread id。
+先从源码生成 `dist/codex-marketplace`，校验后复制到带版本和 hash 的只读发布快照；默认 Codex 只注册这个固定快照，不指向活跃源码或可重建 `dist/`。记录源码 commit、候选包 hash、CLI 安装路径和新任务 thread id。
 
 安装后用全新持久任务验证：
 

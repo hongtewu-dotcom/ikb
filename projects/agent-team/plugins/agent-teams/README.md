@@ -36,11 +36,11 @@ python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py \
 
 `make validate-codex` 会先清理旧候选包，再从白名单源码重建。生成和测试不会注册 marketplace，也不会修改 `~/.codex`。
 
-非默认 marketplace 的安装入口是：
+正式安装先把已校验候选复制为带版本和 hash 的只读快照，再注册该快照。2.0.0 当前入口是：
 
 ```bash
 codex plugin marketplace add \
-  /Users/htwu/projects/ikb/projects/agent-team/dist/codex-marketplace --json
+  /Users/htwu/.local/share/codex-marketplaces/ikb-agent-team/2.0.0-b3b5e673 --json
 codex plugin add agent-teams@ikb-agent-team --json
 ```
 
