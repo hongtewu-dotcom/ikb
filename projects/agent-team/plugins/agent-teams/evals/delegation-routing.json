@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "multi-repository-independent-read",
+      "level": "L1",
+      "prompt": "Compare orchestration rules in two repositories and cite evidence from each repository.",
+      "expected": "spawn",
+      "role": "explorer",
+      "policy_terms": ["multiple repositories", "independent evidence streams"]
+    },
+    {
+      "id": "competing-debug-hypotheses",
+      "level": "L1",
+      "prompt": "Investigate two independent hypotheses for an intermittent timeout while the parent inspects the critical path.",
+      "expected": "spawn",
+      "role": "explorer",
+      "policy_terms": ["competing debugging hypotheses"]
+    },
+    {
+      "id": "independent-verification-sidecar",
+      "level": "L1",
+      "prompt": "Implement the bounded change while an independent branch validates the unchanged consumer contract.",
+      "expected": "spawn",
+      "role": "explorer",
+      "policy_terms": ["independent test, verification, or review"]
+    },
+    {
+      "id": "frozen-disjoint-writers",
+      "level": "L2",
+      "prompt": "After freezing the shared interface, implement two modules with non-overlapping file ownership.",
+      "expected": "spawn",
+      "role": "worker",
+      "policy_terms": ["frozen, disjoint implementation scope"]
+    },
+    {
+      "id": "single-file-copy-change",
+      "level": "L0",
+      "prompt": "Correct one typo in one file.",
+      "expected": "no_spawn",
+      "role": "none",
+      "policy_terms": ["small change in one file"]
+    },
+    {
+      "id": "immediate-critical-path-blocker",
+      "level": "L1",
+      "prompt": "Read the one function whose result is required before any other work can start.",
+      "expected": "no_spawn",
+      "role": "none",
+      "policy_terms": ["immediate blocker"]
+    },
+    {
+      "id": "unfrozen-shared-contract",
+      "level": "L2",
+      "prompt": "Two consumers need a shared schema that has not been agreed or accepted yet.",
+      "expected": "no_spawn",
+      "role": "none",
+      "policy_terms": ["Do not spawn a writer before shared contracts are frozen"]
+    },
+    {
+      "id": "small-batched-multi-source-read",
+      "level": "L1",
+      "prompt": "Compare three short local configuration files that fit in one bounded read and leave no parallel parent work.",
+      "expected": "no_spawn",
+      "role": "none",
+      "policy_terms": ["fit in one bounded local read"]
+    },
+    {
+      "id": "multi-repository-tight-critical-path",
+      "level": "L2",
+      "prompt": "Update two repositories in one tightly coupled sequence where the second contract cannot be known until the first change is verified and the parent has no independent work to overlap.",
+      "expected": "no_spawn",
+      "role": "none",
+      "policy_terms": ["does not by itself justify delegation", "no useful parent work can overlap"]
+    }
+  ]
+}

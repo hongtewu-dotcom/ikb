@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "simple-read",
+      "prompt": "Read note.md and return its only key-value pair. Do not change files.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": []
+    },
+    {
+      "id": "short-independent-read",
+      "prompt": "Compare source-a.md and source-b.md as two independent evidence streams. Determine whether their ownership rules conflict, cite both files, and do useful root-side synthesis while evidence is gathered. Do not change files.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": []
+    },
+    {
+      "id": "parallel-contract-audit",
+      "prompt": "Audit stream-a and stream-b as independent evidence branches against their own contracts. While those branches run, inspect integration.md in the root and synthesize whether the defects interact or violate cross-boundary ownership. This is read-only; use native subagents when their independently verifiable work can progress beside the root. Cite exact files and lines.",
+      "candidate_spawn_min": 1,
+      "candidate_spawn_max": 2,
+      "expected_findings": ["A1", "B3"],
+      "expected_ownership_conflict": false
+    }
+  ]
+}

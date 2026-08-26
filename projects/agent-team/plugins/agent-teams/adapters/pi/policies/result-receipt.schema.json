@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "agent-teams/pi/result-receipt.v1",
+  "title": "agent-teams Pi result receipt",
+  "description": "Structured handoff each delegated agent returns, validated by the workflow's agent schema option. Large evidence should stay in artifacts and be referenced by path or hash, but size alone does not invalidate a receipt.",
+  "type": "object",
+  "required": [
+    "status",
+    "summary",
+    "evidence",
+    "changes",
+    "validation",
+    "gaps"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "partial",
+        "blocked"
+      ],
+      "description": "Execution outcome; independent of any quality verdict."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Concise outcome. Raw tool output should not be copied here."
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Stable references (path, commit, hash, artifact id)."
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Files or artifacts produced/modified."
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Checks run and outcomes."
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Uncovered scope or open unknowns."
+    }
+  },
+  "additionalProperties": false
+}

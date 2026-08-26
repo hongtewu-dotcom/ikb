@@ -1,0 +1,24 @@
+{
+  "name": "ikb-agent-team-dev",
+  "owner": {
+    "name": "wuhongteng"
+  },
+  "metadata": {
+    "description": "Unreleased Agent Team development marketplace",
+    "version": "0.1.0-dev"
+  },
+  "plugins": [
+    {
+      "name": "agent-teams",
+      "source": "./plugins/agent-teams",
+      "description": "Bounded native-subagent governance under active development",
+      "version": "0.1.0-dev",
+      "author": {
+        "name": "Seth Hobson"
+      },
+      "homepage": "https://github.com/wshobson/agents",
+      "license": "MIT",
+      "category": "workflows"
+    }
+  ]
+}

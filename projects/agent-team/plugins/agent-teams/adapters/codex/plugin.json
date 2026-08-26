@@ -1,0 +1,27 @@
+{
+  "name": "agent-teams",
+  "version": "2.0.0",
+  "description": "A thin governance layer for selective Codex native-subagent delegation, disjoint writers, and frozen-snapshot review",
+  "skills": "./skills/",
+  "author": {
+    "name": "wuhongteng"
+  },
+  "license": "MIT",
+  "interface": {
+    "displayName": "Agent Teams",
+    "shortDescription": "Delegate only independent work with measurable coordination value",
+    "longDescription": "Keep simple and tightly coupled work in the root agent. Use Codex native subagents only for independently verifiable branches, disjoint writers behind a frozen contract, or read-only reviewers on one frozen snapshot.",
+    "developerName": "IKB Agent Team",
+    "category": "Coding",
+    "capabilities": [
+      "Selective delegation",
+      "Disjoint parallel development",
+      "Frozen-snapshot review"
+    ],
+    "defaultPrompt": [
+      "Decide whether this task has an independently verifiable branch that materially reduces elapsed time or parent context pressure; keep it local otherwise.",
+      "Coordinate parallel implementation only after shared contracts and disjoint write scopes are frozen.",
+      "Review one frozen snapshot with independent read-only dimensions, then consolidate before repair."
+    ]
+  }
+}

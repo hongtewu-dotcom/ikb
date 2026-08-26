@@ -1,0 +1,17 @@
+[project]
+name = "ikb-agent-team"
+version = "0.1.0.dev0"
+description = "IKB subproject for bounded Codex native-subagent governance"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+  "tools/tests",
+  "plugins/agent-teams/adapters/pi/tests",
+]
