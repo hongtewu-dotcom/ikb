@@ -68,7 +68,7 @@ side_effects: none
 ./bin/ikb knowledge show <knowledge-id>
 ./bin/ikb source context <source-id> --limit 20
 ./bin/ikb knowledge lint --scope work --json
-./bin/ikb doctor --json
+./bin/ikb doctor --write-summary --compact --json
 ```
 
-验证结果必须写入 Run Artifact 并关联 Source/Knowledge refs。只有在真实验收证据齐全且用户允许时，才由后续策展步骤决定是否升级；本 Skill 本身不改变 Knowledge 生命周期。
+验证结果必须写入 Run Artifact 并关联 Source/Knowledge refs，但 Artifact 只保存 `health` 或紧凑计数/结论，禁止写入完整 `doctor`、`people rebuild` 或 `source ingest` JSON。只有在真实验收证据齐全且用户允许时，才由后续策展步骤决定是否升级；本 Skill 本身不改变 Knowledge 生命周期。

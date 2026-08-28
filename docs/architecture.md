@@ -185,7 +185,7 @@ ikb/ikb-data/
   reports/                         # 派生视图
 ```
 
-项目自身的方案、契约和实现说明统一放在 `ikb/docs/`；知识条目、聊天原文和执行证据不放在 `docs/`，而是分别进入 `ikb-data/vaults/`、`ikb-data/sources/` 和 `ikb-data/runs/`。
+项目自身的方案、契约和实现说明统一放在 `ikb/docs/`；知识条目、聊天原文和执行证据不放在 `docs/`，而是分别进入 `ikb-data/knowledge/`、`ikb-data/.system/sources/` 和 `ikb-data/.system/runs/`。
 
 搜索层可以跨两个 Vault 联合检索，但返回结果必须保留 scope 和 sensitivity；工作知识不得被个人工作流导出到公开目标。
 

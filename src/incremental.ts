@@ -3,6 +3,9 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSy
 import { join, resolve } from "node:path";
 import {
   hashSourceContent,
+  hashSourceFile,
+  importExternalSourceRecords,
+  importSourceFileRecords,
   importSourceRecords,
   inspectSourceIntegrity,
   listSources,
@@ -17,6 +20,9 @@ export interface IncrementalImportOptions extends SourceImportOptions {
   logicalKey?: string;
   /** Adapter-specific checkpoint (cursor, latest message id, revision, etc.). */
   cursor?: unknown;
+  /** Optional batch cache. Callers must pass the full Source registry; the
+   * incremental core still applies scope/kind/adapter/path filters. */
+  previousSources?: SourceRecord[];
 }
 
 export interface IncrementalState {
@@ -64,8 +70,9 @@ export interface IncrementalStateInspection {
 
 /**
  * Import only records that are new or changed since the last logical source
- * snapshot. Every imported delta remains an immutable Source; the full raw
- * input is copied into that Source so the evidence boundary is preserved.
+ * snapshot. Every imported delta remains an immutable Source. Generic inputs
+ * keep the full raw snapshot; history adapters may pass an admitted-row raw
+ * snapshot so excluded tool/control output is not copied into IKB.
  */
 export function importIncrementalRecords(
   home: string,
@@ -74,13 +81,49 @@ export function importIncrementalRecords(
   options: IncrementalImportOptions,
   records: SourceMessage[],
 ): IncrementalImportResult {
+  return importIncrementalPrepared(home, originalPath, hashSourceContent(content), options, records, (resolvedPath, normalizedOptions, deltaRecords, sourceId) => (
+    importSourceRecords(home, resolvedPath, content, normalizedOptions, deltaRecords, sourceId)
+  ));
+}
+
+export function importIncrementalFileRecords(
+  home: string,
+  originalPath: string,
+  rawInputPath: string,
+  options: IncrementalImportOptions,
+  records: SourceMessage[],
+): IncrementalImportResult {
+  return importIncrementalPrepared(home, originalPath, hashSourceFile(rawInputPath), options, records, (resolvedPath, normalizedOptions, deltaRecords, sourceId) => (
+    importSourceFileRecords(home, resolvedPath, rawInputPath, normalizedOptions, deltaRecords, sourceId)
+  ));
+}
+
+export function importIncrementalExternalRecords(
+  home: string,
+  originalPath: string,
+  contentHash: string,
+  options: IncrementalImportOptions,
+  records: SourceMessage[],
+): IncrementalImportResult {
+  return importIncrementalPrepared(home, originalPath, contentHash, options, records, (resolvedPath, normalizedOptions, deltaRecords, sourceId) => (
+    importExternalSourceRecords(home, resolvedPath, contentHash, normalizedOptions, deltaRecords, sourceId)
+  ));
+}
+
+function importIncrementalPrepared(
+  home: string,
+  originalPath: string,
+  contentHash: string,
+  options: IncrementalImportOptions,
+  records: SourceMessage[],
+  importDelta: (resolvedPath: string, options: SourceImportOptions, records: SourceMessage[], sourceId: string) => { source: SourceRecord; records: SourceMessage[] },
+): IncrementalImportResult {
   const scope = normalizeSourceScope(options.scope);
   const sensitivity = options.sensitivity ?? (scope === "personal" ? "private" : "work-internal");
   const resolvedPath = resolve(originalPath);
   const logicalKey = options.logicalKey?.trim() || inferLogicalKey(options, resolvedPath, records);
   const previous = findPreviousSources(home, logicalKey, resolvedPath, options);
   const previousSourceIds = previous.map((source) => source.id);
-  const contentHash = hashSourceContent(content);
   const exact = previous.find((source) => source.contentHash === contentHash && inspectSourceIntegrity(home, source).length === 0);
   if (exact) {
     const state = writeState(home, scope, {
@@ -182,7 +225,7 @@ export function importIncrementalRecords(
     sourceId,
     id: rewriteRecordId(record.id, record.sourceId, sourceId),
   }));
-  const imported = importSourceRecords(home, resolvedPath, content, {
+  const imported = importDelta(resolvedPath, {
     kind: options.kind,
     adapter: options.adapter,
     includeTools: options.includeTools,
@@ -281,7 +324,7 @@ export function recordFingerprint(record: SourceMessage): string {
 function findPreviousSources(home: string, logicalKey: string, originalPath: string, options: IncrementalImportOptions): SourceRecord[] {
   const scope = normalizeSourceScope(options.scope);
   const sensitivity = options.sensitivity ?? (scope === "personal" ? "private" : "work-internal");
-  const candidates = listSources(home, { includeQuarantined: true }).filter((source) => source.scope === scope
+  const candidates = (options.previousSources ?? listSources(home, { includeQuarantined: true })).filter((source) => source.scope === scope
     && source.sensitivity === sensitivity
     && source.kind === options.kind
     && source.adapter === options.adapter

@@ -1,37 +1,50 @@
-# IKB 当前架构设计图（v0.1）
+# IKB 当前架构
 
-> 重绘日期：2026-07-22
-> 范围：`/Users/htwu/projects/ikb` 当前代码、公开设计文档和本地 `ikb-data` 的状态。
-> 约束：本次只读本地数据，没有触发学城读取；学城入口仍受“滚动 30 分钟最多 10 篇”保护。
+> 当前合同：2026-08-27
+> 范围：`/Users/htwu/projects/_personal/ikb` 当前代码、公开设计文档和本地 `ikb-data`。
+> 边界：下文保留旧 Task/Run、Candidate、Experience、QV5 和 Harness 的实现图，仅用于兼容、排障与渐进迁移；它们不是目标知识生命周期。
 
 ## 1. 这张图回答什么问题
 
-IKB 不是“把所有聊天丢进 Obsidian”的文件夹，而是一个本地优先的个人知识工作系统：
+IKB 的目标主架构只有 Source、Knowledge、Inbox 和 Receipt：
 
 ```text
-外部材料/历史对话
-  → Source 证据
-  → Candidate / Experience 分流
-  → 分析 Artifact
-  → Knowledge draft / skip
-  → Context Pack
-  → Task / Run / Agent / Skill 执行
-  → Verifier / Eval / Approval
-  → 可追溯结果
-  → Outer Loop 改进候选
+材料 → remember → Source → Inbox → Knowledge → use → Agent 真实任务
+                                            ↓
+                              Result + feedback → Inbox
+
+每次 remember、use、feedback 或维护 → 一份 Receipt
 ```
 
 核心原则：
 
-1. `Ledger` 是 Task、Run、Approval、Artifact 和结构化事件的真相源。
-2. `Source` 是原始证据真相源；`Knowledge` 不是聊天原文的替身。
-3. 本地质量投影和 HTML 报表只能展示 Ledger 的派生视图，不能反向决定质量。
-4. `admit` 和 `skip` 都是正常结果；知识条数不是产出指标。
-5. 外部读取默认只读，任何发送、评论、发布、push 等副作用必须经过 Approval。
+1. `Source` 和 `Knowledge` 是内容真相；Inbox 文件存在即待处理，Receipt 只记录已经发生的事实。
+2. Knowledge 只有 `draft / verified / retired` 三个状态；feedback、确认事实和待处理原因不进入状态机。
+3. 默认召回只消费 verified；incorrect 使被使用的 Knowledge 退出默认召回并进入 Inbox。
+4. Agent 只需要 `remember / use / feedback`；facade 已穿过真实消费者，旧命令仍因存量调用和历史排障保留为 internal compatibility。
+5. index、dashboard、health 和 AGENTS 投影都可重建，不能反向成为真相。
 
-## 2. 当前本地状态快照
+## 当前实现与运行边界
 
-命令：`./bin/ikb candidate list --scope work --json`。本次没有读取学城，只读取候选池和 Ledger。
+截至 2026-08-27，目标外层合同已经接通：
+
+| 能力 | 当前实现 | 运行证据边界 |
+|---|---|---|
+| Agent facade | `remember / use / feedback`；verified Knowledge 零命中时只回退本地 Source，并明确标注“尚未整理” | 真实任务 `run-3dfef84a-59e` 已完成 Knowledge 召回、Result 和 helpful feedback |
+| Inbox / Receipt | `inbox/<scope>` 表示待办；`.system/receipts` 由单一 writer 写 `ikb-receipt.v1` | facade、source-sync 和语义维护均按一次调用一份 Receipt 验证 |
+| 周期任务 | LaunchAgent 每 6 小时执行 `source-sync`，周一 03:30 执行 `weekly-housekeeping`；报告服务保持只读 | 已安装 source-sync 的 RunAtLoad 最近一次退出码为 0；Codex 10:30 每日语义维护仅完成配置与脚本 dry-run，尚未观察到下一次宿主调度 |
+| Principle | 仍是 Knowledge，进入 verified 前要求人确认精确正文；后续确认过的修订由 Receipt 绑定提议稿、当前卡和 Ledger 事件 | 三张冲突 Principle 已由用户确认 A/B/C，更新为 revision 2；lint、默认检索和 4/4 AGENTS 投影检查均通过 |
+| 物理存储 | 新 Inbox、Receipt 和集中路径合同已存在；Source、Knowledge、Ledger、Run 仍从兼容目录读取 | 全量备份与引用审计已完成，但旧路径仍被代码和 Ledger 引用，禁止迁移或删除 |
+
+因此“四对象主架构已可用”描述的是 Agent 和维护任务的当前合同，不等于旧物理数据已经搬完。兼容目录仍是当前数据事实的一部分，直到引用清零、迁移前后哈希与真实检索对账通过。
+
+## 兼容实现附录
+
+以下各节记录当前仍可读取和运行的旧实现，用于迁移期间定位代码、审计历史数据和验证兼容性。章节中的 Candidate、Experience、Compilation、Task/Run、Artifact、Gate、Harness 和多阶段流程均不得被新增调用方当作目标主架构。
+
+## 2. 初始本地状态快照（2026-07-22）
+
+命令：`./bin/ikb candidate list --scope work --json`。以下数字只保留为初始架构重绘时的历史基线，不代表 2026-08-10 当前规模；当前值应重新执行命令获取。本次更新没有读取学城，只读取本地 Source、Artifact 和 Ledger。
 
 | 对象 | 当前值 | 含义 |
 |---|---:|---|
@@ -69,6 +82,7 @@ flowchart LR
       SP["Source Plane\n原始快照 + normalized records"]
       CP["Candidate Pool\n入口、状态、限频"]
       XP["Experience / Person\nTriage、dossier、周期蒸馏"]
+      KC["Knowledge Compilation\nInventory、Evidence、Fact Package、Loss Verifier"]
       KP["Knowledge Plane\nDraft / Verified / Retired"]
       EP["Execution Plane\nTask / Run / Agent / Skill"]
       CTRL["Control Plane\nLedger / Approval / Artifact / Gate"]
@@ -89,9 +103,10 @@ flowchart LR
     C --> EP
     SP --> CP
     SP --> XP
-    SP --> KP
+    SP --> KC
+    XP --> KC
+    KC --> KP
     CP --> SP
-    XP --> KP
     KP --> EP
     EP --> CTRL
     EP --> H
@@ -107,7 +122,7 @@ flowchart LR
     classDef plane fill:#dae8fc,stroke:#1b4f72,color:#111;
     classDef store fill:#d5e8d4,stroke:#2e7d32,color:#111;
     classDef external fill:#f5f5f5,stroke:#666,color:#111;
-    class SP,CP,XP,KP,EP,CTRL,EV,OUT plane;
+    class SP,CP,XP,KC,KP,EP,CTRL,EV,OUT plane;
     class O,CTRL store;
     class MEM,HIST,ELE,KM,DOC,WORK,U,C,H,R external;
 ```
@@ -130,9 +145,11 @@ flowchart TB
     SRC["src/source.ts + incremental.ts\nSource registry、raw、records、hash、游标"]
     CAND["src/candidates.ts\nCandidate Pool 与状态机"]
     XP["src/experience.ts + person.ts\nSession Triage、dossier、Evidence View"]
-    LAYOUT["src/layout.ts\nVault / scope filesystem contract"]
+    COMP["src/extraction/* + extraction-result.ts\n结构清单、V3合同、损耗账、确定性Product View"]
+    LAYOUT["src/layout.ts\n目标目录、兼容读取与 scope contract"]
     KNOW["src/knowledge.ts + knowledge/*\n契约、编解码、查询、写入、视图、生命周期"]
     REASON["src/reasoning.ts\n确定性压缩与用户决策包"]
+    RUNPLAN["src/run-plan.ts\nRun DAG 校验、落盘与执行后冻结"]
     STORE["src/store.ts\nLedgerStore、状态投影、hash 链"]
     ROLE["src/roles.ts + gates.ts + loops.ts\n角色、Skill 白名单、G0-G6、三 Loop 契约"]
     HE["projects/eval-plane/src/harness-events.ts + harness-eval.ts\n事件规范与兼容 12 Case"]
@@ -144,12 +161,12 @@ flowchart TB
     REPORT["scripts/ikb-report-server.mjs\n本地 HTML 只读服务"]
 
     subgraph DATA["ikb-data（本地私有，不上传 GitHub）"]
-      S1["sources/<id>/\nsource.json / raw / records.jsonl"]
-      S2["governance/<scope>/\ncandidates / experiences / reasoning"]
-      S3["vaults/<scope>/\nObsidian Markdown + indexes"]
-      S4["runs/<run>/\ninput / plan / context / artifacts / verification"]
-      S5["ledger/events.jsonl\n不可变 hash 链"]
-      S6["reports/ maintenance/\n派生报表与质量快照"]
+      S1[".system/sources/<id>/\nsource.json / raw / records.jsonl"]
+      S2["governance/<scope>/ + experiences/\n输入候选 / Episode / Analysis / Knowledge Candidate / reasoning"]
+      S3["knowledge/<scope>/ + revisions/knowledge/\nObsidian Markdown + indexes + before/after journal"]
+      S4[".system/runs/<run>/\nplan / content-addressed context / artifacts / verification"]
+      S5[".system/ledger/events.jsonl\n不可变 hash 链"]
+      S6[".system/cache/ + .system/maintenance/\n派生报表与质量快照"]
     end
 
     CLI --> CMD
@@ -158,8 +175,10 @@ flowchart TB
     CMD --> SRC
     CMD --> CAND
     CMD --> XP
+    CMD --> COMP
     CMD --> KNOW
     CMD --> REASON
+    CMD --> RUNPLAN
     CMD --> STORE
     CMD --> ROLE
     CMD --> HE
@@ -171,9 +190,11 @@ flowchart TB
     SRC --> CAND
     CAND --> S2
     S1 --> XP
+    S1 --> COMP
     XP --> S2
     LAYOUT --> S3
-    XP --> KNOW
+    XP --> COMP
+    COMP --> KNOW
     KNOW --> S3
     REASON --> S2
     STORE --> S5
@@ -184,6 +205,7 @@ flowchart TB
     OUT --> S6
     QUALITY --> S6
     STORE --> S4
+    RUNPLAN --> S4
     PLAN --> MAINT
     MAINT --> CLI
     REPORT --> CLI
@@ -192,7 +214,7 @@ flowchart TB
 
     classDef code fill:#dae8fc,stroke:#1b4f72,color:#111;
     classDef data fill:#d5e8d4,stroke:#2e7d32,color:#111;
-    class CLI,CMD,EXT,HIST,SRC,CAND,XP,KNOW,REASON,STORE,ROLE,HE,EVAL,OUT,QUALITY,MAINT,REPORT code;
+    class CLI,CMD,EXT,HIST,SRC,CAND,XP,COMP,KNOW,REASON,RUNPLAN,STORE,ROLE,HE,EVAL,OUT,QUALITY,MAINT,REPORT code;
     class S1,S2,S3,S4,S5,S6 data;
 ```
 
@@ -200,12 +222,13 @@ flowchart TB
 
 | 层 | 真相源 | 允许写入 | 可重建视图 |
 |---|---|---|---|
-| Source | `ikb-data/sources/<id>` + `source.*` 事件 | intake / connector | context、人物 evidence、候选发现 |
+| Source | `ikb-data/.system/sources/<id>` + `source.*` 事件 | intake / connector | context、人物 evidence、候选发现 |
 | Candidate | `governance/<scope>/candidates/pool.jsonl` + candidate 事件 | discover、queue、resolve、skip | 候选列表、限频状态 |
-| Knowledge | `vaults/<scope>/<collection>/*.md` + knowledge 事件 | Curator draft、Verifier/用户确认 | index、搜索、Obsidian backlink |
-| Experience | `governance/<scope>/experiences/` | Triage、跨 Run cluster | pending_review 候选 |
+| Knowledge | `vaults/<scope>/<collection>/*.md` + `revisions/knowledge/` + knowledge 事件 | Curator draft、用户确认后的 revision transaction | index、搜索、Obsidian backlink |
+| Experience | `experiences/<scope>/`、`experiences/analysis/`、`experiences/candidates/` | Triage、Analyst、跨 Run cluster、人工 Candidate 决策 | queue、pending_review、review hold |
+| Compilation | Run 中登记且内容寻址的 manifest/result/fidelity Artifact | Analyst 写 V3 结构和事实；Core 重算损耗；Curator 只选择通过的 Product | 可读分析、信息损耗报告、确定性 Knowledge 正文 |
 | Task/Run | `ledger/events.jsonl` | CLI/Harness/Verifier/Approval | timeline、status、report |
-| Artifact | `runs/<run>/artifacts/` + artifact 事件 | Agent/Verifier | digest、报告、质量引用 |
+| Artifact | artifact 事件绑定的内容 hash 与本地文件 | Agent/Verifier；Context Builder 自动登记 Context Artifact | digest、报告、质量引用 |
 | 本地质量投影 | `src/run-quality.ts` + `reports/` | HTML/日报/评估 | 质量快照，不反写 IKB |
 
 ## 5. Source → Knowledge → Work 详细闭环
@@ -220,11 +243,14 @@ flowchart LR
     D -- "否" --> G["Source Context\n按记录引用阅读"]
     F --> G
     G --> H["Session Triage / Person Dossier\n只保存信号与引用"]
-    G --> I["Analyst Artifact\nfindings / unknowns / conflicts"]
+    G --> I["来源结构清单\n章节 / 表格 / 图片 / 评论 / 附件"]
     H --> I
-    I --> J{ "长期可复用且证据充分？" }
+    I --> IA["Evidence + Reference Facts\n每个单元都有处置"]
+    IA --> IB["类型化 Compilation\nFact Package + Product View"]
+    IB --> IC["Information Loss Verifier\n双向引用 + 问题覆盖"]
+    IC --> J{ "长期可复用且门禁通过？" }
     J -- "skip" --> K["Rejected Candidate\n保留理由，不生成知识"]
-    J -- "admit" --> L["Knowledge Card draft\n适用、边界、使用契约、验证计划"]
+    J -- "admit" --> L["QV5 完整评审稿\n正文必须等于选中 Product View"]
     L --> M["lint + doctor + relation rebuild"]
     M --> N{ "真实 Task / 用户确认？" }
     N -- "否" --> O["draft\n可引用但不当作已验证事实"]
@@ -327,11 +353,14 @@ stateDiagram-v2
     waiting --> done: Approval + Verifier 通过
     queued --> running: run.started
     running --> awaiting_approval: L3/L4 Action
-    running --> succeeded: verifier + evaluation 通过
+    running --> succeeded: 终态执行成功
     running --> failed: 失败/阻断
     awaiting_approval --> running: approve/resume
     awaiting_approval --> failed: reject
     failed --> queued: retry
+    succeeded --> quality_pass: Eval 通过，不改终态
+    succeeded --> quality_blocked: Eval 阻断，不改终态
+    quality_blocked --> queued: 新 Run retry
     done --> [*]
     canceled --> [*]
 ```
@@ -350,7 +379,7 @@ stateDiagram-v2
 
 这张图也标出“已经画出但还没有伪装成完成”的部分：
 
-1. 学城候选池目前还有 1408 个 `discovered`，后续只能在用户允许的窗口内按优先级读取。
+1. 学城候选池仍有较大 `discovered/blocked` backlog，实时数量以本地报告为准；后续只能在滚动限频窗口内按优先级读取。
 2. Inner/Mid 的 Ledger、事件、Verifier 和真实 Run Assessment 已接通；通用角色自动交接和恢复编排仍是 partial。
 3. Outer 的失败观察、聚类和候选已存在；自动修改 Prompt、Skill、权限、角色和门禁明确禁止。
 4. 本地报告可以展示运行过程和评估结果，但只有 IKB 本地 Source/Artifact 才能判断内容正确性。
@@ -370,6 +399,8 @@ stateDiagram-v2
 ./bin/ikb gate list --json
 
 # Harness Eval
+./bin/ikb run plan <run-id> --file <plan.json>
+./bin/ikb context <task-id> --run <run-id> --scope personal|work
 ./bin/ikb harness suite list --json
 ./bin/ikb harness eval --suite work-protocol --json
 ./bin/ikb harness report --suite work-protocol

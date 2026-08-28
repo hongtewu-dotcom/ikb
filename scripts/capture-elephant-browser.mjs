@@ -129,7 +129,8 @@ function extractDomTextChunk(options, row, field, start) {
   const encoded = evaluate(options, `(() => {
     const elements = [...document.querySelectorAll('.bubbleMessageListContainer .bubble-item')];
     const element = ${mid ? `elements.find((candidate) => candidate.getAttribute('data-mid') === ${midLiteral})` : `elements[${domIndex}]`};
-    const value = ${field === "raw" ? "(element?.textContent || element?.innerText || '')" : "(element?.querySelector('.dx-message-text')?.textContent || element?.querySelector('.dx-message-text')?.innerText || '')"};
+    const message = [...(element?.querySelectorAll('.dx-message-text') || [])].at(-1);
+    const value = ${field === "raw" ? "(element?.textContent || element?.innerText || '')" : "(message?.textContent || message?.innerText || '')"};
     return btoa(unescape(encodeURIComponent(value.slice(${start}, ${start + TEXT_CHUNK_CHARS}))));
   })()`);
   return decodeBase64(encoded);
@@ -172,7 +173,8 @@ function extractChunk(options, start, requestedSize) {
             actor: element.querySelector('.nickname')?.textContent?.trim() || element.querySelector('.nickname')?.innerText?.trim() || '',
             time: element.querySelector('.bubble-item-time')?.textContent?.trim() || element.querySelector('.bubble-item-time')?.innerText?.trim() || '',
             content: (() => {
-              const value = element.querySelector('.dx-message-text')?.textContent || element.querySelector('.dx-message-text')?.innerText || '';
+              const message = [...element.querySelectorAll('.dx-message-text')].at(-1);
+              const value = message?.textContent || message?.innerText || '';
               return { preview: value.slice(0, ${TEXT_PREVIEW_CHARS}), length: value.length };
             })(),
             refs: [...element.querySelectorAll('a[href]')].map((link) => link.href),

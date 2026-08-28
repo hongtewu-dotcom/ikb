@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { captureKnowledge } from "../src/knowledge.ts";
 import { buildPublication } from "../src/publication.ts";
+import { inspectPublicText } from "../src/publication/safety.ts";
 import { buildPublicationRun } from "../src/publication/workflow.ts";
 import { LedgerStore } from "../src/store.ts";
 
@@ -126,6 +127,18 @@ test("sensitive content blocks publication before writing any release", () => {
     /internal_domain/,
   );
   assert.equal(existsSync(join(home, "publications")), false);
+});
+
+test("public safety scan allows generated public ids but still blocks long numeric identifiers", () => {
+  const publicId = "pub-1234567890123456";
+  const generated = inspectPublicText(`{"public_id":"${publicId}","path":"${publicId}.md"}`, [publicId]);
+  assert.equal(generated.some((issue) => issue.code === "long_numeric_identifier"), false);
+
+  const untrustedLookalike = inspectPublicText(`正文中的 ${publicId} 没有被声明为系统生成值`);
+  assert.equal(untrustedLookalike.some((issue) => issue.code === "long_numeric_identifier"), true);
+
+  const plain = inspectPublicText("订单标识 1234567890123456 不能进入公开投影", [publicId]);
+  assert.equal(plain.some((issue) => issue.code === "long_numeric_identifier"), true);
 });
 
 test("internal product and workspace names are blocked from public projections", () => {

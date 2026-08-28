@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, readdirSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join, resolve } from "node:path";
-import { importIncrementalRecords, type IncrementalImportResult, type IncrementalState } from "./incremental.ts";
-import { findSourceByOriginAndHash, hashSourceContent, importSourceRecords, normalizeSourceScope } from "./source.ts";
+import { StringDecoder } from "node:string_decoder";
+import { importIncrementalExternalRecords, inspectIncrementalState, type IncrementalImportResult, type IncrementalState } from "./incremental.ts";
+import { findSourceByOriginAndHash, hashSourceContent, hashSourceFile, importExternalSourceRecords, listSources, normalizeSourceScope } from "./source.ts";
 import type { SourceKind, SourceMessage, SourceRecord } from "./types.ts";
 
 export type HistoryAdapter = "claude" | "codex" | "desk" | "elephant";
@@ -32,6 +33,7 @@ export interface HistoryImportResult {
   duplicateCount?: number;
   changedCount?: number;
   incrementalState?: IncrementalState;
+  readBytes?: number;
 }
 
 export interface HistoryScanResult {
@@ -56,6 +58,34 @@ interface HistoryOptions {
   from?: string;
   to?: string;
   incremental?: boolean;
+  previousSources?: SourceRecord[];
+  previousStates?: IncrementalState[];
+}
+
+interface CodexMessageCheckpoint {
+  role: string;
+  conversationId: string;
+  contentHash: string;
+  origin: string;
+}
+
+interface CodexParseCheckpoint {
+  conversationId: string;
+  cwd: string;
+  subagent: { id: string; parentThreadId: string; agentPath: string } | null;
+  lastMessage: CodexMessageCheckpoint | null;
+}
+
+interface HistoryCursorV2 {
+  version: 2;
+  modifiedAt: string;
+  size: number;
+  byteOffset: number;
+  lineNumber: number;
+  endedWithNewline: boolean;
+  anchorBytes: number;
+  anchorHash: string;
+  codex: CodexParseCheckpoint | null;
 }
 
 const ADAPTERS: HistoryAdapter[] = ["claude", "codex", "desk", "elephant"];
@@ -131,7 +161,9 @@ function inHistoryTimeRange(timestamp: number, from: number | undefined, to: num
 export function ingestHistory(home: string, selection: HistoryAdapterSelection = "all", options: HistoryOptions = {}): HistoryScanResult {
   const scope = normalizeSourceScope(options.scope, "work");
   const candidates = discoverHistoryCandidates(selection, options);
-  const results = candidates.map((candidate) => importHistoryCandidate(home, candidate, options));
+  const previousSources = options.incremental === false ? undefined : listSources(home, { includeQuarantined: true });
+  const previousStates = options.incremental === false ? undefined : inspectIncrementalState(home).entries;
+  const results = candidates.map((candidate) => importHistoryCandidate(home, candidate, { ...options, previousSources, previousStates }));
   return {
     scanId: `scan-${randomUUID().slice(0, 12)}`,
     adapter: selection,
@@ -147,59 +179,280 @@ export function ingestHistory(home: string, selection: HistoryAdapterSelection =
 }
 
 export function importHistoryCandidate(home: string, candidate: HistoryCandidate, options: HistoryOptions = {}): HistoryImportResult {
+  let admittedRawPath: string | null = null;
   try {
-    const content = readFileSync(candidate.path);
-    const contentHash = hashSourceContent(content);
     const scope = normalizeSourceScope(options.scope ?? candidate.scope, "work");
     const sensitivity = options.sensitivity ?? candidate.sensitivity;
     const includeTools = options.includeTools === true;
     const incremental = options.incremental !== false;
+    if (incremental) {
+      const quick = unchangedHistoryResult(candidate, scope, sensitivity, includeTools, options.previousSources ?? listSources(home, { includeQuarantined: true }), options.previousStates ?? inspectIncrementalState(home).entries);
+      if (quick) return quick;
+    }
+    const previousStates = options.previousStates ?? inspectIncrementalState(home).entries;
+    const resume = incremental ? resumableHistoryCursor(candidate, includeTools, previousStates) : null;
+    const sourceId = `src-${randomUUID().slice(0, 12)}`;
+    const admitted = streamAdmittedHistory(home, candidate, sourceId, includeTools, resume);
+    admittedRawPath = admitted.path;
+    const records = admitted.records;
+    const contentHash = hashSourceFile(admitted.path);
     if (!incremental) {
       const existing = findSourceByOriginAndHash(home, candidate.path, contentHash, { adapter: candidate.adapter, scope, sensitivity, includeTools });
-      if (existing) return { candidate, source: existing, recordCount: existing.recordCount, skipped: true, reason: "unchanged" };
+      if (existing) return { candidate, source: existing, recordCount: existing.recordCount, skipped: true, reason: "unchanged", readBytes: admitted.readBytes };
     }
 
-    const sourceId = `src-${randomUUID().slice(0, 12)}`;
-    const records = parseHistoryContent(candidate, sourceId, content.toString("utf8"), includeTools);
-    if (records.length === 0) return { candidate, source: null, recordCount: 0, skipped: true, reason: "no messages" };
     if (incremental) {
-      const result = importIncrementalRecords(home, candidate.path, content, {
+      const result = importIncrementalExternalRecords(home, candidate.path, contentHash, {
         kind: candidate.kind,
         adapter: candidate.adapter,
         includeTools,
         title: candidate.title,
         scope,
         sensitivity,
-        logicalKey: `history:${candidate.adapter}:${candidate.path}`,
+        logicalKey: historyLogicalKey(candidate, includeTools),
+        cursor: admitted.cursor,
+        originBytes: candidate.size,
+        originModifiedAt: candidate.modifiedAt,
+        previousSources: options.previousSources,
       }, records);
-      return historyResult(candidate, result);
+      return historyResult(candidate, result, admitted.readBytes);
     }
-    const result = importSourceRecords(home, candidate.path, content, {
+    if (records.length === 0) return { candidate, source: null, recordCount: 0, skipped: true, reason: "no messages", readBytes: admitted.readBytes };
+    const result = importExternalSourceRecords(home, candidate.path, contentHash, {
       kind: candidate.kind,
       adapter: candidate.adapter,
       includeTools,
       title: candidate.title,
       scope,
       sensitivity,
+      originBytes: candidate.size,
+      originModifiedAt: candidate.modifiedAt,
     }, records, sourceId);
-    return { candidate, source: result.source, recordCount: result.records.length, skipped: false, deltaCount: result.records.length, duplicateCount: 0, changedCount: 0 };
+    return { candidate, source: result.source, recordCount: result.records.length, skipped: false, deltaCount: result.records.length, duplicateCount: 0, changedCount: 0, readBytes: admitted.readBytes };
   } catch (error) {
     return { candidate, source: null, recordCount: 0, skipped: false, error: (error as Error).message };
+  } finally {
+    if (admittedRawPath) rmSync(admittedRawPath, { force: true });
   }
 }
 
-function historyResult(candidate: HistoryCandidate, result: IncrementalImportResult): HistoryImportResult {
+function unchangedHistoryResult(candidate: HistoryCandidate, scope: "personal" | "work", sensitivity: string, includeTools: boolean, sources: SourceRecord[], states: IncrementalState[]): HistoryImportResult | null {
+  const logicalKey = historyLogicalKey(candidate, includeTools);
+  const matchingSources = sources.filter((source) => source.originalPath === candidate.path
+    && source.scope === scope
+    && source.sensitivity === sensitivity
+    && source.kind === candidate.kind
+    && source.adapter === candidate.adapter
+    && Boolean(source.includeTools) === includeTools)
+    .sort((left, right) => right.importedAt.localeCompare(left.importedAt));
+  const sourceById = new Map(matchingSources.map((source) => [source.id, source] as const));
+  const legacyLogicalKey = `history:${candidate.adapter}:${candidate.path}`;
+  const matchingStates = states.filter((state) => state.logicalKey === logicalKey || (!includeTools && state.logicalKey === legacyLogicalKey)).sort((left, right) => right.scannedAt.localeCompare(left.scannedAt));
+  const latestState = matchingStates[0];
+  if (latestState && sameHistoryCursor(latestState.cursor, candidate)) {
+    const source = latestState.sourceId ? sourceById.get(latestState.sourceId) ?? matchingSources[0] ?? null : null;
+    return {
+      candidate,
+      source,
+      recordCount: source?.recordCount ?? 0,
+      skipped: true,
+      reason: source ? "unchanged-cursor" : "no messages",
+      deltaCount: 0,
+      duplicateCount: source?.recordCount ?? 0,
+      changedCount: 0,
+      incrementalState: latestState,
+      readBytes: 0,
+    };
+  }
+  const candidateModifiedAt = Date.parse(candidate.modifiedAt);
+  if (latestState && Date.parse(latestState.scannedAt) >= candidateModifiedAt) {
+    const source = latestState.sourceId ? sourceById.get(latestState.sourceId) ?? matchingSources[0] ?? null : null;
+    return {
+      candidate,
+      source,
+      recordCount: source?.recordCount ?? 0,
+      skipped: true,
+      reason: source ? "unchanged-since-scan" : "no messages",
+      deltaCount: 0,
+      duplicateCount: source?.recordCount ?? 0,
+      changedCount: 0,
+      incrementalState: latestState,
+      readBytes: 0,
+    };
+  }
+  const source = matchingSources.find((item) => Date.parse(item.importedAt) >= candidateModifiedAt);
+  if (!source) return null;
+  return {
+    candidate,
+    source,
+    recordCount: source.recordCount,
+    skipped: true,
+    reason: "unchanged-since-import",
+    deltaCount: 0,
+    duplicateCount: source.recordCount,
+    changedCount: 0,
+    readBytes: 0,
+  };
+}
+
+function historyLogicalKey(candidate: HistoryCandidate, includeTools: boolean): string {
+  return `history:${candidate.adapter}:${includeTools ? "with-tools" : "visible"}:${candidate.path}`;
+}
+
+function sameHistoryCursor(value: unknown, candidate: HistoryCandidate): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cursor = value as Record<string, unknown>;
+  return cursor.modifiedAt === candidate.modifiedAt && cursor.size === candidate.size;
+}
+
+function resumableHistoryCursor(candidate: HistoryCandidate, includeTools: boolean, states: IncrementalState[]): HistoryCursorV2 | null {
+  const logicalKey = historyLogicalKey(candidate, includeTools);
+  const legacyLogicalKey = `history:${candidate.adapter}:${candidate.path}`;
+  const latest = states
+    .filter((state) => state.logicalKey === logicalKey || (!includeTools && state.logicalKey === legacyLogicalKey))
+    .sort((left, right) => right.scannedAt.localeCompare(left.scannedAt))[0];
+  if (!latest?.cursor || typeof latest.cursor !== "object" || Array.isArray(latest.cursor)) return null;
+  const cursor = latest.cursor as Partial<HistoryCursorV2>;
+  if (cursor.version !== 2
+    || !Number.isInteger(cursor.byteOffset)
+    || !Number.isInteger(cursor.lineNumber)
+    || !Number.isInteger(cursor.anchorBytes)
+    || cursor.endedWithNewline !== true
+    || typeof cursor.anchorHash !== "string"
+    || cursor.byteOffset! < 0
+    || cursor.byteOffset! > candidate.size
+    || cursor.anchorBytes! < 0
+    || cursor.anchorBytes! > cursor.byteOffset!) return null;
+  const anchor = readFileRange(candidate.path, cursor.byteOffset! - cursor.anchorBytes!, cursor.anchorBytes!);
+  if (hashSourceContent(anchor) !== cursor.anchorHash) return null;
+  return cursor as HistoryCursorV2;
+}
+
+function readFileRange(path: string, start: number, length: number): Buffer {
+  if (length === 0) return Buffer.alloc(0);
+  const descriptor = openSync(path, "r");
+  const output = Buffer.allocUnsafe(length);
+  let offset = 0;
+  try {
+    while (offset < length) {
+      const bytesRead = readSync(descriptor, output, offset, length - offset, start + offset);
+      if (bytesRead === 0) throw new Error(`History source changed while reading anchor: ${path}`);
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return output;
+}
+
+function historyResult(candidate: HistoryCandidate, result: IncrementalImportResult, readBytes: number): HistoryImportResult {
   return {
     candidate,
     source: result.source,
     recordCount: result.recordCount,
     skipped: result.skipped,
-    reason: result.reason,
+    reason: result.reason === "no-records" ? "no messages" : result.reason,
     deltaCount: result.deltaCount,
     duplicateCount: result.duplicateCount,
     changedCount: result.changedCount,
     incrementalState: result.state,
+    readBytes,
   };
+}
+
+function streamAdmittedHistory(home: string, candidate: HistoryCandidate, sourceId: string, includeTools: boolean, resume: HistoryCursorV2 | null): { path: string; records: SourceMessage[]; cursor: HistoryCursorV2; readBytes: number } {
+  const directory = join(resolve(home), "staging", "history-admitted");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const path = join(directory, `${candidate.id}-${randomUUID().slice(0, 12)}.jsonl`);
+  const input = openSync(candidate.path, "r");
+  const output = openSync(path, "wx", 0o600);
+  const decoder = new StringDecoder("utf8");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const records: SourceMessage[] = [];
+  const codexState = candidate.adapter === "codex" ? createCodexParseState(candidate, resume?.codex ?? null) : null;
+  let pending = "";
+  let lineNumber = resume?.lineNumber ?? 0;
+  let position = resume?.byteOffset ?? 0;
+  const startOffset = position;
+  let endedWithNewline = resume?.endedWithNewline ?? true;
+  let inputClosed = false;
+  let outputClosed = false;
+  const consume = (line: string): void => {
+    lineNumber += 1;
+    if (!line.trim()) return;
+    let row: Record<string, unknown>;
+    try {
+      const value = JSON.parse(line) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("row must be an object");
+      row = value as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(`Invalid ${candidate.adapter} history JSONL at line ${lineNumber}: ${(error as Error).message}`);
+    }
+    let admitted: SourceMessage[] = [];
+    let retainRaw = false;
+    if (codexState) {
+      retainRaw = consumeCodexRow(codexState, row, lineNumber, candidate, sourceId, includeTools);
+    } else if (candidate.adapter === "desk") {
+      admitted = parseDesk([{ row, line: lineNumber }], candidate, sourceId, includeTools);
+      retainRaw = admitted.length > 0;
+    } else if (candidate.adapter === "elephant") {
+      admitted = parseElephant([{ row, line: lineNumber }], candidate, sourceId);
+      retainRaw = admitted.length > 0;
+    } else {
+      admitted = parseClaude([{ row, line: lineNumber }], candidate, sourceId, includeTools);
+      retainRaw = admitted.length > 0;
+    }
+    records.push(...admitted);
+    if (retainRaw) writeSync(output, `${line}\n`);
+  };
+  try {
+    while (true) {
+      if (position >= candidate.size) break;
+      const bytesRead = readSync(input, buffer, 0, Math.min(buffer.length, candidate.size - position), position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      endedWithNewline = buffer[bytesRead - 1] === 0x0a;
+      pending += decoder.write(buffer.subarray(0, bytesRead));
+      while (true) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline).replace(/\r$/, "");
+        pending = pending.slice(newline + 1);
+        consume(line);
+      }
+    }
+    pending += decoder.end();
+    if (pending) consume(pending.replace(/\r$/, ""));
+    closeSync(input);
+    inputClosed = true;
+    closeSync(output);
+    outputClosed = true;
+    chmodSync(path, 0o600);
+    const anchorBytes = Math.min(candidate.size, 64 * 1024);
+    const cursor: HistoryCursorV2 = {
+      version: 2,
+      modifiedAt: candidate.modifiedAt,
+      size: candidate.size,
+      byteOffset: candidate.size,
+      lineNumber,
+      endedWithNewline,
+      anchorBytes,
+      anchorHash: hashSourceContent(readFileRange(candidate.path, candidate.size - anchorBytes, anchorBytes)),
+      codex: codexState ? codexCheckpoint(codexState) : null,
+    };
+    return {
+      path,
+      records: codexState ? finishCodexParse(codexState) : records,
+      cursor,
+      readBytes: candidate.size - startOffset,
+    };
+  } catch (error) {
+    if (!inputClosed) closeSync(input);
+    if (!outputClosed) closeSync(output);
+    rmSync(path, { force: true });
+    throw error;
+  }
 }
 
 export function parseHistoryContent(candidate: HistoryCandidate, sourceId: string, text: string, includeTools = false): SourceMessage[] {
@@ -303,63 +556,109 @@ function firstNonEmptyStringList(row: Record<string, unknown>, keys: string[]): 
   return [];
 }
 
+interface CodexParseState {
+  conversationId: string;
+  cwd: string;
+  subagent: { id: string; parentThreadId: string; agentPath: string } | null;
+  messages: Array<{ message: SourceMessage; origin: string }>;
+  previous: CodexMessageCheckpoint | null;
+}
+
+function createCodexParseState(candidate: HistoryCandidate, checkpoint: CodexParseCheckpoint | null = null): CodexParseState {
+  return {
+    conversationId: checkpoint?.conversationId ?? candidate.id,
+    cwd: checkpoint?.cwd ?? "",
+    subagent: checkpoint?.subagent ?? null,
+    messages: [],
+    previous: checkpoint?.lastMessage ?? null,
+  };
+}
+
+function finishCodexParse(state: CodexParseState): SourceMessage[] {
+  return state.messages.map(({ message }) => message);
+}
+
+function codexCheckpoint(state: CodexParseState): CodexParseCheckpoint {
+  const latest = state.messages.at(-1);
+  const lastMessage = latest ? {
+    role: latest.message.role,
+    conversationId: latest.message.conversationId,
+    contentHash: hashSourceContent(latest.message.content),
+    origin: latest.origin,
+  } : state.previous;
+  return {
+    conversationId: state.conversationId,
+    cwd: state.cwd,
+    subagent: state.subagent,
+    lastMessage,
+  };
+}
+
 function parseCodex(rows: Array<{ row: Record<string, unknown>; line: number }>, candidate: HistoryCandidate, sourceId: string, includeTools: boolean): SourceMessage[] {
-  let conversationId = candidate.id;
-  let cwd = "";
-  let subagent: { id: string; parentThreadId: string; agentPath: string } | null = null;
-  const messages: Array<{ message: SourceMessage; origin: string }> = [];
-  for (const { row, line } of rows) {
-    const payload = objectValue(row.payload);
-    if (!payload) continue;
-    const type = stringValue(payload.type) ?? stringValue(row.type);
-    if (type === "session_meta") {
-      conversationId = stringValue(payload.session_id) ?? stringValue(payload.id) ?? conversationId;
-      cwd = stringValue(payload.cwd) ?? cwd;
-      subagent = codexSubagentMetadata(payload);
-      continue;
-    }
-    let role: string | null = null;
-    let content: unknown;
-    let origin = type ?? "unknown";
-    if (type === "user_message") {
-      role = "user";
-      content = payload.message;
-    } else if (type === "agent_message") {
-      role = "assistant";
-      content = payload.message;
-    } else if (type === "message" && stringValue(payload.role) === "assistant" && (stringValue(payload.phase) ?? stringValue(row.phase)) === "final_answer") {
-      role = "assistant";
-      content = payload.content ?? payload.message;
-      origin = "response_final";
-    } else if (includeTools && ["custom_tool_call_output", "function_call_output", "mcp_tool_call_end", "patch_apply_end", "web_search_end"].includes(type ?? "")) {
-      role = "tool";
-      content = payload.output ?? payload.result ?? payload.stdout ?? payload.message ?? payload.query;
-    } else {
-      continue;
-    }
-    if (!role || (subagent && !includeTools)) continue;
-    const text = textFromContent(content, includeTools);
-    if (!text) continue;
-    const currentConversationId = subagent ? `${conversationId}:subagent:${subagent.id}` : conversationId;
-    const currentActor = subagent ? `agent:${subagent.id}` : role;
-    const currentRole = subagent && role === "user" ? "agent_prompt" : role;
-    const enriched = { ...row, cwd: cwd || row.cwd, parentThreadId: subagent?.parentThreadId, agentPath: subagent?.agentPath };
-    const message = makeMessage(sourceId, candidate, enriched, line, currentRole, text, currentConversationId, currentActor, subagent ? [currentActor] : ["user", "assistant"]);
-    const previous = messages.at(-1);
-    const isExactAssistantMirror = previous
-      && previous.message.role === "assistant"
-      && message.role === "assistant"
-      && previous.message.conversationId === message.conversationId
-      && previous.message.content === message.content
-      && new Set([previous.origin, origin]).has("response_final")
-      && new Set([previous.origin, origin]).has("agent_message");
-    if (isExactAssistantMirror) {
-      if (origin === "response_final") messages[messages.length - 1] = { message, origin };
-      continue;
-    }
-    messages.push({ message, origin });
+  const state = createCodexParseState(candidate);
+  for (const { row, line } of rows) consumeCodexRow(state, row, line, candidate, sourceId, includeTools);
+  return finishCodexParse(state);
+}
+
+function consumeCodexRow(state: CodexParseState, row: Record<string, unknown>, line: number, candidate: HistoryCandidate, sourceId: string, includeTools: boolean): boolean {
+  const payload = objectValue(row.payload);
+  if (!payload) return false;
+  const type = stringValue(payload.type) ?? stringValue(row.type);
+  if (type === "session_meta") {
+    state.conversationId = stringValue(payload.session_id) ?? stringValue(payload.id) ?? state.conversationId;
+    state.cwd = stringValue(payload.cwd) ?? state.cwd;
+    state.subagent = codexSubagentMetadata(payload);
+    return true;
   }
-  return messages.map(({ message }) => message);
+  let role: string | null = null;
+  let content: unknown;
+  let origin = type ?? "unknown";
+  if (type === "user_message") {
+    role = "user";
+    content = payload.message;
+  } else if (type === "agent_message") {
+    role = "assistant";
+    content = payload.message;
+  } else if (type === "message" && stringValue(payload.role) === "assistant" && (stringValue(payload.phase) ?? stringValue(row.phase)) === "final_answer") {
+    role = "assistant";
+    content = payload.content ?? payload.message;
+    origin = "response_final";
+  } else if (includeTools && ["custom_tool_call_output", "function_call_output", "mcp_tool_call_end", "patch_apply_end", "web_search_end"].includes(type ?? "")) {
+    role = "tool";
+    content = payload.output ?? payload.result ?? payload.stdout ?? payload.message ?? payload.query;
+  } else {
+    return false;
+  }
+  if (!role || (state.subagent && !includeTools)) return false;
+  const text = textFromContent(content, includeTools);
+  if (!text) return false;
+  const currentConversationId = state.subagent ? `${state.conversationId}:subagent:${state.subagent.id}` : state.conversationId;
+  const currentActor = state.subagent ? `agent:${state.subagent.id}` : role;
+  const currentRole = state.subagent && role === "user" ? "agent_prompt" : role;
+  const enriched = { ...row, cwd: state.cwd || row.cwd, parentThreadId: state.subagent?.parentThreadId, agentPath: state.subagent?.agentPath };
+  const message = makeMessage(sourceId, candidate, enriched, line, currentRole, text, currentConversationId, currentActor, state.subagent ? [currentActor] : ["user", "assistant"]);
+  const currentPrevious = state.messages.at(-1);
+  const previous = currentPrevious ? {
+    role: currentPrevious.message.role,
+    conversationId: currentPrevious.message.conversationId,
+    contentHash: hashSourceContent(currentPrevious.message.content),
+    origin: currentPrevious.origin,
+  } : state.previous;
+  const isExactAssistantMirror = previous
+    && previous.role === "assistant"
+    && message.role === "assistant"
+    && previous.conversationId === message.conversationId
+    && previous.contentHash === hashSourceContent(message.content)
+    && new Set([previous.origin, origin]).has("response_final")
+    && new Set([previous.origin, origin]).has("agent_message");
+  if (isExactAssistantMirror) {
+    if (origin === "response_final" && currentPrevious) state.messages[state.messages.length - 1] = { message, origin };
+    state.previous = { role: message.role, conversationId: message.conversationId, contentHash: hashSourceContent(message.content), origin };
+    return true;
+  }
+  state.messages.push({ message, origin });
+  state.previous = null;
+  return true;
 }
 
 function codexSubagentMetadata(payload: Record<string, unknown>): { id: string; parentThreadId: string; agentPath: string } | null {

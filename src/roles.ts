@@ -70,7 +70,7 @@ const ROLE_MANIFESTS: readonly AgentManifest[] = [
     name: "工作执行员",
     description: "执行编码、评审、CR、文档、沟通草稿和向上管理等工作 Skill。",
     accepts: ["coding", "review", "cr", "document", "communication", "upward-management", "general"],
-    skills: ["coding", "review", "cr", "document", "elephant-draft", "upward-management"],
+    skills: ["coding", "review", "cr", "document", "elephant-draft", "upward-management", "ikb-use-knowledge"],
     gates: ["G4", "G5", "G6"],
     read: ["task", "run", "source", "knowledge", "artifact"],
     write: ["workspace", "artifact", "ledger", "draft"],

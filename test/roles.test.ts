@@ -22,6 +22,7 @@ test("agent role manifests expose stable ids, Chinese names, gates and skills", 
     "验收审计员",
   ]);
   assert.deepEqual(roles.find((role) => role.id === "ikb-operator")?.gates, ["G4", "G5", "G6"]);
+  assert.equal(roles.find((role) => role.id === "ikb-operator")?.skills.includes("ikb-use-knowledge"), true);
   assert.equal(roles.find((role) => role.id === "ikb-intake")?.skills.includes("ikb-source-intake"), true);
   assert.equal(roles.find((role) => role.id === "ikb-harness")?.skills.includes("publication-build"), true);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { compactSourceRaw } from "../src/source-raw.ts";
@@ -30,6 +30,7 @@ test("raw compaction preserves every rawPath and shares append-only snapshots", 
   assert.equal(result.prefixCompactedSources, 1);
   assert.equal(result.linkedSources, 1);
   assert.equal(existsSync(result.reportPath), true);
+  assert.equal(result.reportPath, join(home, "governance", "raw-dedup", "latest.json"));
   assert.deepEqual(inspectSourceIntegrity(home, first), []);
   assert.deepEqual(inspectSourceIntegrity(home, second), []);
   assert.deepEqual(inspectSourceIntegrity(home, exact), []);
@@ -43,4 +44,5 @@ test("raw compaction preserves every rawPath and shares append-only snapshots", 
   assert.equal(rerun.issues.length, 0);
   assert.equal(rerun.prefixCompactedSources, 0);
   assert.equal(rerun.linkedSources, 0);
+  assert.deepEqual(readdirSync(join(home, "governance", "raw-dedup")), ["latest.json"]);
 });

@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { importIncrementalRecords, type IncrementalImportResult } from "./incremental.ts";
 import { findSourceByOriginAndHash, hashSourceContent, importSourceRecords, listSources, readSourceRecords } from "./source.ts";
 import type { SourceMessage, SourceRecord } from "./types.ts";
@@ -123,6 +124,7 @@ const defaultRunner: ExternalJsonRunner = (command, args, timeoutMs) => {
   try {
     stdout = execFileSync(command, args, {
       encoding: "utf8",
+      env: externalRuntimeEnv(command),
       maxBuffer: 64 * 1024 * 1024,
       timeout: timeoutMs,
       windowsHide: true,
@@ -133,6 +135,16 @@ const defaultRunner: ExternalJsonRunner = (command, args, timeoutMs) => {
   }
   return parseJsonOutput(stdout, command);
 };
+
+function externalRuntimeEnv(command: string): NodeJS.ProcessEnv {
+  const requiredBins = [dirname(process.execPath)];
+  if (isAbsolute(command)) requiredBins.push(dirname(command));
+  const currentBins = String(process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  return {
+    ...process.env,
+    PATH: [...new Set([...requiredBins, ...currentBins])].join(delimiter),
+  };
+}
 
 export function ingestCitadelDocument(home: string, contentIdValue: string, options: CitadelIngestOptions = {}): CitadelIngestResult {
   const contentId = normalizeContentId(contentIdValue);
@@ -235,7 +247,7 @@ export function ingestElephantHistory(home: string, options: ElephantIngestOptio
   const scope = normalizeScope(options.scope);
   const sensitivity = options.sensitivity ?? (scope === "personal" ? "private" : "work-internal");
   const runner = options.runner ?? defaultRunner;
-  const command = options.command ?? process.env.IKB_ELEPHANT_COMMAND ?? "dx";
+  const command = options.command ?? elephantCommand();
   const timeoutMs = options.timeoutMs ?? 30_000;
   const args = elephantCommandArgs(request, options.cdpUrl ?? process.env.IKB_ELEPHANT_CDP_URL);
   const response = asObject(runner(command, args, timeoutMs));
@@ -276,6 +288,13 @@ export function ingestElephantHistory(home: string, options: ElephantIngestOptio
     changedCount: imported.incremental?.changedCount,
     incremental: imported.incremental,
   };
+}
+
+function elephantCommand(): string {
+  const configured = process.env.IKB_ELEPHANT_COMMAND?.trim();
+  if (configured) return configured;
+  const bunInstalledDx = resolve(homedir(), ".bun/bin/dx");
+  return existsSync(bunInstalledDx) ? bunInstalledDx : "dx";
 }
 
 function importSnapshot(

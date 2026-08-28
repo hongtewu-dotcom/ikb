@@ -41,6 +41,32 @@ test("CLI is a routing facade and does not own domain behavior", () => {
   assert.match(cli, /handleHarness/);
 });
 
+test("public architecture stays at four objects and three Knowledge states", () => {
+  const types = read("src/types.ts");
+  assert.match(types, /KnowledgeStatus\s*=\s*"draft"\s*\|\s*"verified"\s*\|\s*"retired"/);
+  const readme = read("README.md");
+  const architecture = read("docs/architecture-current.md");
+  const contracts = read("docs/contracts.md");
+  for (const content of [readme, architecture, contracts]) {
+    for (const object of ["Source", "Knowledge", "Inbox", "Receipt"]) assert.match(content, new RegExp(`\\b${object}\\b`));
+    assert.match(content, /draft\s*\/\s*verified\s*\/\s*retired/);
+  }
+  assert.match(architecture, /兼容实现附录/);
+  assert.match(contracts, /内部兼容合同/);
+});
+
+test("default CLI help exposes only the three Agent intents", () => {
+  const cli = read("src/cli.ts");
+  const publicHelp = /const PUBLIC_HELP = `([\s\S]*?)`;/m.exec(cli)?.[1] ?? "";
+  assert.match(publicHelp, /ikb remember/);
+  assert.match(publicHelp, /ikb use/);
+  assert.match(publicHelp, /ikb feedback/);
+  for (const internal of ["ikb task", "ikb run", "ikb source", "ikb knowledge", "ikb harness"]) {
+    assert.doesNotMatch(publicHelp, new RegExp(internal));
+  }
+  assert.match(cli, /--help --all/);
+});
+
 test("Knowledge facade has one-way dependencies into cohesive submodules", () => {
   const facade = read("src/knowledge.ts");
   assert.doesNotMatch(facade, /\bfunction\s+/);

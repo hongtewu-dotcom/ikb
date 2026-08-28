@@ -5,8 +5,13 @@ import { assertValue, printValue } from "../format.ts";
 import { discoverHistoryCandidates, ingestHistory } from "../history.ts";
 import { ingestCitadelDocument, ingestElephantHistory, searchCitadel, snapshotCitadelSearch } from "../external.ts";
 import { importIncrementalRecords } from "../incremental.ts";
-import { compactSourceRaw } from "../source-raw.ts";
-import { addCandidate } from "../candidates.ts";
+import { compactSourceRaw, externalizeHistoryRaw } from "../source-raw.ts";
+import { buildSourceCoverage, writeSourceCoverage } from "../source-coverage.ts";
+import { addSourceAliases, buildSourceReceipt, listSourceAliases, lookupSources } from "../source-query.ts";
+import { lintReferenceManifest, writeReferenceLint } from "../reference-manifest.ts";
+import { syncLocalFiles, syncLocalSourceTargets, type LocalFileSyncResult } from "../files.ts";
+import { listSourceTargets } from "../source-targets.ts";
+import { addCandidate, listCandidates } from "../candidates.ts";
 import { buildElephantPersonView, type PersonViewResult } from "../person.ts";
 import {
   buildSourceContext,
@@ -56,13 +61,14 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
         }, records);
         store.recordSourceEvent(result.logicalKey, "source.incremental_scan", result.state as unknown as Record<string, unknown>);
         if (!result.source) {
-          printValue({ source: null, recordCount: 0, deltaCount: result.deltaCount, duplicateCount: result.duplicateCount, changedCount: result.changedCount, previousSourceIds: result.previousSourceIds, logicalKey: result.logicalKey, skipped: true, reason: result.reason, candidateDiscovery: null }, outputFormat(parsed));
+          printValue({ source: null, receipt: null, recordCount: 0, deltaCount: result.deltaCount, duplicateCount: result.duplicateCount, changedCount: result.changedCount, previousSourceIds: result.previousSourceIds, logicalKey: result.logicalKey, skipped: true, reason: result.reason, candidateDiscovery: null }, outputFormat(parsed));
           break;
         }
         store.recordSourceIngestEvents([{ id: result.source.id, payload: sourceEventPayload(result.source) }]);
         const candidateDiscovery = discoverCandidatesForSource(store, home, result.source.id);
         printValue({
           source: result.source,
+          receipt: buildSourceReceipt(home, result.source),
           recordCount: result.recordCount,
           deltaCount: result.deltaCount,
           duplicateCount: result.duplicateCount,
@@ -79,7 +85,7 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
       if (existing) {
         store.recordSourceIngestEvents([{ id: existing.id, payload: sourceEventPayload(existing) }]);
         const candidateDiscovery = discoverCandidatesForSource(store, home, existing.id);
-        printValue({ source: existing, recordCount: existing.recordCount, recordIds: [], truncated: false, skipped: true, reason: "unchanged", candidateDiscovery }, outputFormat(parsed));
+        printValue({ source: existing, receipt: buildSourceReceipt(home, existing), recordCount: existing.recordCount, recordIds: [], truncated: false, skipped: true, reason: "unchanged", candidateDiscovery }, outputFormat(parsed));
         break;
       }
       const result = importSource(home, sourcePath, {
@@ -91,7 +97,7 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
       });
       store.recordSourceIngestEvents([{ id: result.source.id, payload: sourceEventPayload(result.source) }]);
       const candidateDiscovery = discoverCandidatesForSource(store, home, result.source.id);
-      printValue({ source: result.source, recordCount: result.records.length, recordIds: result.records.slice(0, 20).map((record) => record.id), truncated: result.records.length > 20, candidateDiscovery }, outputFormat(parsed));
+      printValue({ source: result.source, receipt: buildSourceReceipt(home, result.source), recordCount: result.records.length, recordIds: result.records.slice(0, 20).map((record) => record.id), truncated: result.records.length > 20, candidateDiscovery }, outputFormat(parsed));
       break;
     }
     case "discover": {
@@ -129,24 +135,101 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
         skipped: scan.skipped,
         failed: scan.failed,
       });
-      for (const result of scan.results) {
-        if (result.incrementalState) store.recordSourceEvent(result.incrementalState.logicalKey, "source.incremental_scan", result.incrementalState as unknown as Record<string, unknown>);
-      }
+      store.recordSourceEvents(scan.results.flatMap((result) => result.incrementalState && !result.skipped ? [{
+        id: result.incrementalState.logicalKey,
+        eventType: "source.incremental_scan" as const,
+        payload: result.incrementalState as unknown as Record<string, unknown>,
+      }] : []));
       store.recordSourceIngestEvents(scan.results.flatMap((result) => result.source ? [{ id: result.source.id, payload: sourceEventPayload(result.source) }] : []));
-      const candidateDiscoveries = scan.results.flatMap((result) => result.source ? [discoverCandidatesForSource(store, home, result.source.id)] : []);
+      const importedResults = scan.results.filter((result) => result.source && !result.skipped && !result.error);
+      const existingSources = listSources(home);
+      const candidateCache = new Map(listCandidates(home, scan.scope).map((candidate) => [candidate.fingerprint, candidate] as const));
+      const candidateDiscoveries = importedResults.map((result) => discoverCandidatesForSource(store, home, result.source!.id, {
+        cache: candidateCache,
+        existingSources,
+        source: result.source!,
+      }));
+      const resultRows = scan.results.map((result) => ({
+        candidate: result.candidate,
+        sourceId: result.source?.id ?? null,
+        recordCount: result.recordCount,
+        skipped: result.skipped,
+        reason: result.reason,
+        error: result.error,
+        deltaCount: result.deltaCount,
+        duplicateCount: result.duplicateCount,
+        changedCount: result.changedCount,
+        incrementalState: result.incrementalState,
+      }));
       printValue({
         ...scan,
-        results: scan.results.map((result) => ({
-          candidate: result.candidate,
-          sourceId: result.source?.id ?? null,
-          recordCount: result.recordCount,
-          skipped: result.skipped,
-          reason: result.reason,
+        results: parsed.options.summary === true ? resultRows.filter((result) => !result.skipped || result.error) : resultRows,
+        summarized: parsed.options.summary === true,
+        candidateDiscoveries,
+      }, outputFormat(parsed));
+      break;
+    }
+    case "sync-files": {
+      const kind = requiredOption(parsed, "kind");
+      assertValue(["document", "review_comment", "manual"].includes(kind), "--kind must be document, review_comment, or manual");
+      const scan = syncLocalFiles(home, requiredArg(args, 0, "local file root"), {
+        adapter: requiredOption(parsed, "adapter"),
+        kind,
+        scope: optionalOption(parsed, "scope") ?? "work",
+        sensitivity: optionalOption(parsed, "sensitivity"),
+        extensions: (optionalOption(parsed, "extensions") ?? "md").split(","),
+        exclude: (optionalOption(parsed, "exclude") ?? "").split(",").filter(Boolean),
+        limit: optionalOption(parsed, "limit") ? Number(parsed.options.limit) : 0,
+      });
+      recordLocalFileScan(store, scan);
+      const importedResults = scan.results.filter((result) => result.source && !result.skipped && !result.error);
+      const existingSources = listSources(home);
+      const candidateCache = new Map(listCandidates(home, scan.scope).map((candidate) => [candidate.fingerprint, candidate] as const));
+      const candidateDiscoveries = importedResults.map((result) => discoverCandidatesForSource(store, home, result.source!.id, { cache: candidateCache, existingSources, source: result.source! }));
+      printValue({
+        ...scan,
+        results: scan.results.map((result) => ({ path: result.path, sourceId: result.source?.id ?? null, skipped: result.skipped, reason: result.reason, error: result.error, deltaCount: result.deltaCount, duplicateCount: result.duplicateCount, changedCount: result.changedCount })),
+        candidateDiscoveries,
+      }, outputFormat(parsed));
+      break;
+    }
+    case "target-list":
+      printValue(listSourceTargets(home, optionalOption(parsed, "scope")), outputFormat(parsed));
+      break;
+    case "sync-targets": {
+      const sync = syncLocalSourceTargets(home, optionalOption(parsed, "scope"));
+      store.recordSourceEvent(sync.scanId, "source.target_scan", {
+        discoveredTargets: sync.discoveredTargets,
+        syncedTargets: sync.syncedTargets,
+        failedTargets: sync.failedTargets,
+        discoveredFiles: sync.discoveredFiles,
+        imported: sync.imported,
+        skipped: sync.skipped,
+        failedFiles: sync.failedFiles,
+      });
+      const scans = sync.results.flatMap((result) => result.scan ? [result.scan] : []);
+      for (const scan of scans) recordLocalFileScan(store, scan);
+      const existingSources = listSources(home);
+      const candidateCaches = new Map<string, Map<string, ReturnType<typeof listCandidates>[number]>>();
+      const candidateDiscoveries = scans.flatMap((scan) => scan.results.filter((result) => result.source && !result.skipped && !result.error).map((result) => {
+        let cache = candidateCaches.get(scan.scope);
+        if (!cache) {
+          cache = new Map(listCandidates(home, scan.scope).map((candidate) => [candidate.fingerprint, candidate] as const));
+          candidateCaches.set(scan.scope, cache);
+        }
+        return discoverCandidatesForSource(store, home, result.source!.id, { cache, existingSources, source: result.source! });
+      }));
+      printValue({
+        ...sync,
+        results: sync.results.map((result) => ({
+          targetId: result.target.id,
+          scope: result.target.scope,
+          root: result.scan?.root ?? result.target.locator?.path ?? null,
+          discovered: result.scan?.discovered ?? 0,
+          imported: result.scan?.imported ?? 0,
+          skipped: result.scan?.skipped ?? 0,
+          failed: result.scan?.failed ?? 0,
           error: result.error,
-          deltaCount: result.deltaCount,
-          duplicateCount: result.duplicateCount,
-          changedCount: result.changedCount,
-          incrementalState: result.incrementalState,
         })),
         candidateDiscoveries,
       }, outputFormat(parsed));
@@ -182,6 +265,8 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
         commentCount: result.comments?.count ?? 0,
         commentsImported: result.comments?.imported ?? false,
         metadata: result.metadata,
+        documentReceipt: buildSourceReceipt(home, result.document.source),
+        commentReceipt: result.comments?.source ? buildSourceReceipt(home, result.comments.source) : null,
         candidateDiscoveries,
       }, outputFormat(parsed));
       break;
@@ -295,6 +380,40 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
     case "list":
       printValue(listSources(home, { includeQuarantined: parsed.options["include-quarantined"] === true }), outputFormat(parsed));
       break;
+    case "lookup":
+      printValue(lookupSources(home, requiredArg(args, 0, "source query"), {
+        scope: optionalOption(parsed, "scope"),
+        includeQuarantined: parsed.options["include-quarantined"] === true,
+        allVersions: parsed.options["all-versions"] === true,
+        limit: optionalOption(parsed, "limit") ? Number(parsed.options.limit) : undefined,
+      }), outputFormat(parsed));
+      break;
+    case "receipt":
+      printValue(buildSourceReceipt(home, requiredArg(args, 0, "source id")), outputFormat(parsed));
+      break;
+    case "alias-add": {
+      const id = requiredArg(args, 0, "source id");
+      const result = addSourceAliases(home, id, requiredOption(parsed, "alias").split(","));
+      if (result.added.length > 0) store.recordSourceEvent(id, "source.aliases_updated", { added: result.added, aliases: result.aliases });
+      printValue(result, outputFormat(parsed));
+      break;
+    }
+    case "alias-list":
+      printValue(listSourceAliases(home, args[0]), outputFormat(parsed));
+      break;
+    case "coverage": {
+      const report = buildSourceCoverage(home, { scope: optionalOption(parsed, "scope") ?? "work" });
+      const paths = parsed.options.write === true ? writeSourceCoverage(home, report) : null;
+      printValue({ ...report, paths }, outputFormat(parsed));
+      break;
+    }
+    case "reference-lint": {
+      const result = lintReferenceManifest(home, requiredOption(parsed, "manifest"));
+      const paths = parsed.options.write === true ? writeReferenceLint(home, result) : null;
+      printValue({ ...result, paths }, outputFormat(parsed));
+      if (!result.ok) process.exitCode = 2;
+      break;
+    }
     case "show": {
       const id = requiredArg(args, 0, "source id");
       const source = findSource(home, id);
@@ -325,9 +444,25 @@ export function handleSource(store: LedgerStore, home: string, action: string | 
       }), outputFormat(parsed));
       break;
     }
+    case "externalize-history-raw": {
+      const scope = optionalOption(parsed, "scope");
+      assertValue(!scope || scope === "personal" || scope === "work", "--scope must be personal or work");
+      printValue(externalizeHistoryRaw(home, {
+        scope: scope as "personal" | "work" | undefined,
+        dryRun: parsed.options["dry-run"] === true,
+        onMigrated: (source) => store.recordSourceEvent(source.id, "source.storage_migrated", { ...source }),
+      }), outputFormat(parsed));
+      break;
+    }
     default:
       throw new Error(`Unknown source action: ${action ?? ""}`);
   }
+}
+
+function recordLocalFileScan(store: LedgerStore, scan: LocalFileSyncResult): void {
+  store.recordSourceEvent(scan.scanId, "source.file_scan", { root: scan.root, adapter: scan.adapter, scope: scan.scope, discovered: scan.discovered, imported: scan.imported, skipped: scan.skipped, failed: scan.failed });
+  store.recordSourceEvents(scan.results.flatMap((result) => result.incrementalState && !result.skipped ? [{ id: result.incrementalState.logicalKey, eventType: "source.incremental_scan" as const, payload: result.incrementalState as unknown as Record<string, unknown> }] : []));
+  store.recordSourceIngestEvents(scan.results.flatMap((result) => result.source ? [{ id: result.source.id, payload: sourceEventPayload(result.source) }] : []));
 }
 
 function printPersonView(view: PersonViewResult): void {

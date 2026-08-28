@@ -7,6 +7,7 @@ export function knowledgeDirectoryForType(type: string): KnowledgeDirectory {
   if (["project", "goal", "initiative"].includes(normalized)) return "projects";
   if (["person", "stakeholder", "contact"].includes(normalized)) return "people";
   if (normalized === "decision") return "decisions";
+  if (normalized === "principle") return "principles";
   if (["playbook", "procedure", "workflow", "checklist"].includes(normalized)) return "playbooks";
   if (["lesson", "pitfall", "risk", "experience", "learning"].includes(normalized)) return "lessons";
   if (["synthesis", "analysis", "comparison", "summary", "insight"].includes(normalized)) return "syntheses";

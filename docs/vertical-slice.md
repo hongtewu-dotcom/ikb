@@ -15,9 +15,9 @@
 | 跨来源人物视图 | `ikb people view|rebuild` 将 Citadel 文档/评论、大象和 Agent Source 按明确身份聚合到 Obsidian 可重建人物页 |
 | 学城文档与评论 | 通过 `oa-skills citadel --raw` 导入当前正文/元信息，以及划词评论、全文评论和回复 |
 | 学城搜索与输入候选池 | `source search-citadel` 保存搜索快照并可入池；`candidate discover` 从 Source 发现学城引用；维护流程可自动将候选 `resolve-all` 为正文/评论 Source，手工 `resolve` 仍要求 `queued` |
-| 原始证据 | 原文件复制到项目内 `ikb-data/sources/<source-id>/raw/`，raw 与 normalized records 分别保存内容 hash；追加型快照可通过 `source compact-raw` 共享 CoW 前缀 |
+| 原始证据 | 原文件复制到项目内 `ikb-data/.system/sources/<source-id>/raw/`，raw 与 normalized records 分别保存内容 hash；追加型快照可通过 `source compact-raw` 共享 CoW 前缀 |
 | Context 导出 | `ikb source context` 输出带记录 ID、角色、时间和 refs 的 Markdown |
-| Agent 接口 | `ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator` 可被对应角色读取和调用；角色 manifest、中文名、门禁和 Run 启动校验已落地 |
+| Agent 接口 | `ikb-source-intake`、`ikb-conversation-analysis`、`ikb-knowledge-curator`、`ikb-use-knowledge` 可被对应角色读取和调用；角色 manifest、中文名、门禁和 Run 启动校验已落地 |
 | 知识回写 | 分析结论可通过 `ikb capture --collection <name>` 进入对应 collection 的 draft，保留 `source_kind` 和 `source_refs` |
 | 可追溯 | `source.ingested` 写入事件账本，`ikb doctor` 检查 raw hash、normalized JSONL 和记录数量 |
 
@@ -28,7 +28,7 @@
 当前真实边界：
 
 - 资料采集员的 Source 导入、完整性检查和人物/来源视图已真实跑通；
-- 学城搜索、引用发现和候选状态机已可运行；维护流程按滚动 30 分钟最多 10 篇、文档间隔 2 秒读取候选池，官方 `oa-skills` 在当前机器不可用或文档无权限时，resolve 会明确失败、标记 `blocked` 且不会伪造 Source；
+- 学城搜索、引用发现和候选状态机已可运行；维护流程按滚动 30 分钟最多 10 篇、文档间隔至少 30 秒读取候选池，读取失败同样计入额度。官方 `oa-skills` 在当前机器不可用或文档无权限时，resolve 会明确失败、标记 `blocked` 且不会伪造 Source；
 - 知识策展员的 draft、source_refs、Obsidian 关系、verify 和 rebuild 已可用，但主要是手工触发；
 - 任务总管的 Task/Run/Approval/Artifact 控制面、角色查询和 Run 启动校验已可用；
 - INNER/MID/OUTER 的输入、输出和证据来源契约已可查询，但仅是运行前契约，不代表三层自动 Loop 已经执行；
@@ -40,7 +40,7 @@
 ## 本轮不落地
 
 - 大象无目标全量扫描、实时订阅和自动发现关键人物；当前只做有界 `dx history` 或批准的本地导出；
-- 增量游标、跨来源全量去重和冲突合并；
+- 大象无目标的跨来源全量去重和自动冲突合并；
 - 人物画像自动晋升 verified；
 - FTS5、Embedding、关系图谱索引；
 - 自动发送大象、提交 CR、push 或其他外部写入；
@@ -61,7 +61,7 @@
 ./bin/ikb candidate list --status discovered --scope work
 ./bin/ikb candidate update <candidate-id> --status queued
 ./bin/ikb candidate resolve <candidate-id>
-./bin/ikb candidate resolve-all --scope work --limit 10 --delay-ms 2000
+./bin/ikb candidate resolve-all --scope work --limit 10 --delay-ms 30000
 IKB_ELEPHANT_CDP_URL=http://127.0.0.1:9222 ./bin/ikb source ingest-elephant \
   --gid <group-id> --type group --limit 10 --scope work
 ./bin/ikb source person --name <person-name> --context-window 2 --scope work --limit 100
@@ -84,4 +84,4 @@ Agent 历史默认只导入最近 20 个会话；原始路径、内容 hash 和�
 
 ## 下一条切片
 
-优先补增量游标、学城历史版本差异和大象会话选择/游标。跨来源人物视图已支持有限范围内的身份匹配与快照去重；外部发送、发表评论、文档发布仍需单独的 Approval 门禁。
+后续切片优先补学城历史版本差异、受控大象会话选择/游标，以及 Experience/人物证据的语义消费。文件、Agent、学城和指定大象输入已经使用统一增量状态；跨来源人物视图支持有限范围内的身份匹配与快照去重。外部发送、发表评论、文档发布仍需单独的 Approval 门禁。

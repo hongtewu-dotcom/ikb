@@ -1,0 +1,4 @@
+interface:
+  display_name: "IKB 持续知识维护"
+  short_description: "持续消费本地证据队列，低损耗维护可追溯的 QV5 正式知识"
+  default_prompt: "使用 $ikb-maintain-knowledge 消费 IKB 本地语义维护队列，每次最多处理 3 个主题，完成 QV5 编纂、验证、事务化维护或生成讲人话的评审包。"

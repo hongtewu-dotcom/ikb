@@ -36,6 +36,7 @@ const PERSONAL_TYPES = new Set([
   "decision",
   "preference",
   "playbook",
+  "principle",
   "lesson",
   "synthesis",
   "entity",
@@ -100,6 +101,9 @@ export function inspectPersonalAdmission(record: KnowledgeRecord): PersonalAdmis
     case "playbook":
       if (record.productType !== "playbook") add("personal_playbook_product_type_mismatch", "a personal playbook must use product_type=playbook");
       if (verified && !VERIFIED_BY_TASK_OR_USER.has(record.verification ?? "")) add("personal_playbook_verification_insufficient", "a verified personal playbook requires a successful task validation or user confirmation");
+      break;
+    case "principle":
+      // The generic Principle gate requires QV5 and explicit user confirmation.
       break;
     case "lesson":
       if ((record.independentEpisodeCount ?? 0) < 1) add("personal_lesson_episode_missing", "a lesson must point to at least one concrete incident episode");

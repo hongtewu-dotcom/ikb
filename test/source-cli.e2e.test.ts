@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import type { EventRecord, SourceRecord } from "../src/types.ts";
 import { ingestHistory } from "../src/history.ts";
 import { LedgerStore } from "../src/store.ts";
+import { resolveLedgerPath, resolvePeopleRoot, resolveSourcesRoot, resolveVault } from "../src/layout.ts";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cliPath = join(projectRoot, "src", "cli.ts");
@@ -26,6 +27,7 @@ test("CLI ingests and audits synthetic document, review, Claude, Codex, Desk and
   writeFileSync(documentPath, "# Synthetic design\n\nKeep the decision evidence.\n");
   writeFileSync(reviewPath, "# Synthetic review\n\nAdd a failure-path test.\n");
   const document = runCli(home, fakeUserHome, ["source", "ingest", documentPath, "--kind", "document", "--scope", "work"]);
+  assert.equal(document.receipt.notice, "仅 Source，未准入为知识");
   runCli(home, fakeUserHome, ["source", "ingest", reviewPath, "--kind", "review_comment", "--scope", "work"]);
   const duplicateReview = runCli(home, fakeUserHome, ["source", "ingest", reviewPath, "--kind", "review_comment", "--scope", "work"]);
   assert.equal(duplicateReview.skipped, true);
@@ -94,8 +96,17 @@ test("CLI ingests and audits synthetic document, review, Claude, Codex, Desk and
 
   const context = runCli(home, fakeUserHome, ["source", "context", document.source.id]);
   assert.match(context.markdown, /decision evidence/);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const aliases = runCli(home, fakeUserHome, ["source", "alias-add", document.source.id, "--alias", "Synthetic 接入文档,决策证据"]);
+  assert.deepEqual(aliases.added, ["Synthetic 接入文档", "决策证据"]);
+  const byTitle = runCli(home, fakeUserHome, ["source", "lookup", "design", "--scope", "work"]);
+  assert.equal(byTitle[0].source.id, document.source.id);
+  const byAlias = runCli(home, fakeUserHome, ["source", "lookup", "决策证据", "--scope", "work"]);
+  assert.equal(byAlias[0].source.id, document.source.id);
+  const receipt = runCli(home, fakeUserHome, ["source", "receipt", document.source.id]);
+  assert.equal(receipt.notice, "仅 Source，未准入为知识");
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "source.ingested").length, 6);
+  assert.equal(events.filter((event) => event.eventType === "source.aliases_updated").length, 1);
   assert.equal(events.filter((event) => event.eventType === "source.history_scan").length, 4);
   const doctor = runCli(home, fakeUserHome, ["doctor"]);
   assert.equal(doctor.ok, true);
@@ -117,10 +128,10 @@ test("CLI captures by collection and records an explicit legacy migration", () =
     "--scope", "work",
     "--source", "src-demo:m1",
   ]);
-  assert.match(captured.path, /\/vaults\/work\/people\//);
+  assert.equal(captured.path.startsWith(join(resolveVault(home, "work"), "people")), true);
   assert.equal(captured.collection, "people");
 
-  const legacyDirectory = join(home, "vaults", "work", "entries");
+  const legacyDirectory = join(resolveVault(home, "work"), "entries");
   const legacyPath = join(legacyDirectory, "2026-07-16-kb-cli-legacy.md");
   mkdirSync(legacyDirectory, { recursive: true });
   writeFileSync(legacyPath, [
@@ -147,9 +158,9 @@ test("CLI captures by collection and records an explicit legacy migration", () =
   assert.equal(migration.moved.length, 1);
   assert.equal(migration.moved[0].collection, "decisions");
   assert.equal(existsSync(legacyPath), false);
-  assert.equal(existsSync(join(home, "vaults", "work", "decisions", "2026-07-16-kb-cli-legacy.md")), true);
+  assert.equal(existsSync(join(resolveVault(home, "work"), "decisions", "2026-07-16-kb-cli-legacy.md")), true);
 
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "knowledge.created").length, 1);
   assert.equal(events.filter((event) => event.eventType === "knowledge.migrated").length, 1);
   assert.equal(events.find((event) => event.eventType === "knowledge.created")?.payload.collection, "people");
@@ -180,7 +191,7 @@ test("CLI resolve-all reads every discovered Citadel candidate and isolates acce
   runCli(home, fakeUserHome, ["init"]);
   const source = runCli(home, fakeUserHome, ["source", "ingest", input, "--kind", "ai_conversation", "--adapter", "codex", "--scope", "work"]);
   runCli(home, fakeUserHome, ["candidate", "discover-all", "--scope", "work"]);
-  const resolved = runCli(home, fakeUserHome, ["candidate", "resolve-all", "--scope", "work"], { IKB_CITADEL_COMMAND: fakeCitadel });
+  const resolved = runCli(home, fakeUserHome, ["candidate", "resolve-all", "--scope", "work", "--delay-ms", "0"], { IKB_CITADEL_COMMAND: fakeCitadel });
   assert.equal(resolved.discovered, 2);
   assert.equal(resolved.ingested, 1);
   assert.equal(resolved.blocked, 1);
@@ -190,7 +201,7 @@ test("CLI resolve-all reads every discovered Citadel candidate and isolates acce
   const sources = runCli(home, fakeUserHome, ["source", "list", "--scope", "work"]);
   assert.equal(sources.some((item: { adapter?: string; kind: string }) => item.adapter === "citadel" && item.kind === "document"), true);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "candidate.queued").length, 2);
   assert.equal(events.filter((event) => event.eventType === "candidate.ingested").length, 1);
   assert.equal(events.filter((event) => event.eventType === "candidate.blocked").length, 1);
@@ -237,18 +248,94 @@ test("CLI context pack carries draft use guidance and records knowledge referenc
   mkdirSync(fakeUserHome, { recursive: true });
   runCli(home, fakeUserHome, ["init"]);
   runCli(home, fakeUserHome, ["capture", "Use code paths and real responses together.", "--title", "Interface automation use card", "--scope", "work", "--source", "src-demo:interface"]);
+  const personalOnly = runCli(home, fakeUserHome, ["capture", "Use the interface automation card for a private personal workflow.", "--title", "Review interface automation personal override", "--scope", "personal", "--source", "manual:personal"]);
   const verified = runCli(home, fakeUserHome, ["capture", "Keep the interface entry evidence.", "--title", "Verified interface rule", "--scope", "work", "--status", "verified", "--source", "src-demo:verified"]);
   const task = runCli(home, fakeUserHome, ["task", "add", "--title", "Review interface automation", "--goal", "Use the interface automation card", "--accept", "Produce a path diff", "--type", "review", "--scope", "work"]);
   runCli(home, fakeUserHome, ["task", "start", task.id]);
   const run = runCli(home, fakeUserHome, ["run", "start", task.id, "--agent", "ikb-operator", "--skill", "review"]);
   const context = runCli(home, fakeUserHome, ["context", task.id, "--run", run.id]);
   assert.equal(context.results.some((item: { title: string; status: string }) => item.title === "Interface automation use card" && item.status === "draft"), true);
+  assert.equal(context.results.some((item: { id: string }) => item.id === personalOnly.id), false);
   assert.match(context.markdown, /verified \+ draft/);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  assert.equal(context.units.length > 0, true);
+  assert.equal(context.units.every((unit: { unitId?: string; kind?: string; text?: string }) => typeof unit.unitId === "string" && typeof unit.kind === "string" && !("text" in unit)), true);
+  assert.equal(context.results.every((item: { body?: string }) => !("body" in item)), true);
+  assert.match(context.contextArtifact.id, /^artifact-/);
+  assert.match(context.contextArtifact.path, /context-pack-[a-f0-9]{16}\.md$/);
+  assert.equal(existsSync(context.contextArtifact.path), true);
+  assert.equal(existsSync(join(run.runDir, "context-pack.md")), true);
+  const repeated = runCli(home, fakeUserHome, ["context", task.id, "--run", run.id]);
+  assert.equal(repeated.contextArtifact.id, context.contextArtifact.id);
+  const scopeMismatch = invokeCli(home, fakeUserHome, ["context", task.id, "--run", run.id, "--scope", "personal"]);
+  assert.notEqual(scopeMismatch.status, 0);
+  assert.match(scopeMismatch.stderr, /does not match Task scope work/);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   const referenced = events.filter((event) => event.eventType === "knowledge.referenced");
   assert.equal(referenced.some((event) => event.aggregateId === verified.id), true);
   assert.equal(referenced.every((event) => event.payload.runId === run.id), true);
+  assert.equal(events.filter((event) => event.eventType === "artifact.created" && event.payload.kind === "context-pack").length, 1);
+  assert.equal(events.filter((event) => event.aggregateId === run.id && event.eventType === "run.artifact_linked" && event.payload.artifactId === context.contextArtifact.id && event.payload.relation === "produced").length, 1);
+  assert.equal(new Set(referenced.map((event) => `${event.aggregateId}:${event.payload.contextHash}`)).size, referenced.length);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
+});
+
+test("CLI context omits a routed parent when it has no directly answerable unit", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-context-cli-zero-unit-e2e-"));
+  const home = join(sandbox, "ikb-data");
+  const fakeUserHome = join(sandbox, "fake-home");
+  mkdirSync(fakeUserHome, { recursive: true });
+  runCli(home, fakeUserHome, ["init"]);
+  runCli(home, fakeUserHome, ["capture", "# 旁路说明\n\n召回。", "--title", "IKB专属召回契约", "--scope", "work", "--source", "src-demo:zero-unit"]);
+  const task = runCli(home, fakeUserHome, ["task", "add", "--title", "IKB专属召回契约", "--goal", "只返回直接回答的问题级单元", "--accept", "没有合格单元时返回零结果", "--type", "coding", "--scope", "work"]);
+  runCli(home, fakeUserHome, ["task", "start", task.id]);
+  const run = runCli(home, fakeUserHome, ["run", "start", task.id, "--agent", "ikb-operator", "--skill", "coding"]);
+
+  const context = runCli(home, fakeUserHome, ["context", task.id, "--run", run.id]);
+
+  assert.match(context.markdown, /Context Pack/);
+  assert.deepEqual(context.results, []);
+  assert.deepEqual(context.units, []);
+  assert.doesNotMatch(context.markdown, /## IKB专属召回契约/);
+});
+
+test("CLI context suppresses only explicitly unrelated Knowledge from the retry ancestor chain", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-context-retry-feedback-e2e-"));
+  const home = join(sandbox, "ikb-data");
+  const fakeUserHome = join(sandbox, "fake-home");
+  mkdirSync(fakeUserHome, { recursive: true });
+  runCli(home, fakeUserHome, ["init"]);
+  const suppressed = runCli(home, fakeUserHome, ["capture", "Pi/Magent retry ancestor card directly answers the retry question.", "--title", "Pi/Magent retry ancestor card", "--scope", "work", "--source", "src-demo:retry-suppressed"]);
+  const ordinary = runCli(home, fakeUserHome, ["capture", "Pi/Magent ordinary unused card directly answers the retry question.", "--title", "Pi/Magent ordinary unused card", "--scope", "work", "--source", "src-demo:retry-ordinary"]);
+  const task = runCli(home, fakeUserHome, ["task", "add", "--title", "Pi/Magent retry ancestor card ordinary unused card", "--goal", "answer the Pi/Magent retry question", "--accept", "only relevant retry Knowledge remains", "--type", "coding", "--scope", "work"]);
+  const store = new LedgerStore({ home });
+  const ancestor = store.createRun(task.id, "ikb-operator", ["coding"]);
+  store.recordKnowledgeEvent(suppressed.id, "knowledge.feedback_recorded", {
+    contractVersion: "knowledge-usage.v1",
+    taskId: task.id,
+    runId: ancestor.id,
+    outcome: "unused",
+    reasonCode: "unrelated-domain",
+    note: "Previous retry lineage proved this card belongs to another domain.",
+  });
+  store.recordKnowledgeEvent(ordinary.id, "knowledge.feedback_recorded", {
+    contractVersion: "knowledge-usage.v1",
+    taskId: task.id,
+    runId: ancestor.id,
+    outcome: "unused",
+    reasonCode: "not_relevant",
+    note: "Ordinary unused feedback must not globally suppress this card.",
+  });
+  const retry = store.createRun(task.id, "ikb-operator", ["coding"], ancestor.id);
+  const independent = store.createRun(task.id, "ikb-operator", ["coding"]);
+  store.close();
+
+  const retryContext = runCli(home, fakeUserHome, ["context", task.id, "--run", retry.id]);
+  assert.equal(retryContext.results.some((item: { id: string }) => item.id === suppressed.id), false);
+  assert.equal(retryContext.results.some((item: { id: string }) => item.id === ordinary.id), true);
+  assert.deepEqual((retryContext.retrieval as { priorFeedbackExcludedIds?: string[] }).priorFeedbackExcludedIds, [suppressed.id]);
+
+  const independentContext = runCli(home, fakeUserHome, ["context", task.id, "--run", independent.id]);
+  assert.deepEqual((independentContext.retrieval as { priorFeedbackExcludedIds?: string[] }).priorFeedbackExcludedIds, []);
 });
 
 test("CLI records a no-knowledge decision once without creating a Vault note", () => {
@@ -293,7 +380,7 @@ test("CLI records a no-knowledge decision once without creating a Vault note", (
   assert.equal(scopeMismatch.status, 1);
   assert.match(scopeMismatch.stderr, /does not match evidence scope work/);
   assert.deepEqual(runCli(home, fakeUserHome, ["knowledge", "list", "--scope", "work"]), []);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.aggregateId === first.candidate.id && event.eventType === "candidate.rejected").length, 1);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
 });
@@ -336,7 +423,7 @@ test("CLI maintains the private key people list and records changes", () => {
   const removed = runCli(home, fakeUserHome, ["people", "remove", "alice"]);
   assert.equal(removed.id, "alice");
   assert.deepEqual(runCli(home, fakeUserHome, ["people", "list"]), []);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.deepEqual(events.filter((event) => event.aggregateType === "person").map((event) => event.eventType), ["person.added", "person.updated", "person.removed"]);
 });
 
@@ -356,11 +443,11 @@ test("CLI rebuilds a cross-source person dossier and records the projection", ()
   assert.equal(dossier.entries[0].content, "Keep the evidence.");
   assert.equal(existsSync(dossier.path), true);
   assert.match(readFileSync(dossier.path, "utf8"), /Keep the evidence/);
-  assert.match(readFileSync(join(home, "vaults", "work", "people", "index.md"), "utf8"), /people\/alice\/index/);
+  assert.match(readFileSync(join(resolvePeopleRoot(home, "work"), "index.md"), "utf8"), /alice\/index/);
 
   const rebuilt = runCli(home, fakeUserHome, ["people", "rebuild", "--scope", "work", "--limit", "10"]);
   assert.equal(rebuilt.length, 1);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "person.view_built").length, 2);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
 });
@@ -389,7 +476,7 @@ test("CLI doctor rejects an orphan source directory", () => {
   const fakeUserHome = join(sandbox, "fake-home");
   mkdirSync(fakeUserHome, { recursive: true });
   runCli(home, fakeUserHome, ["init"]);
-  const orphan = join(home, "sources", "src-orphan");
+  const orphan = join(resolveSourcesRoot(home), "src-orphan");
   mkdirSync(join(orphan, "raw"), { recursive: true });
   writeFileSync(join(orphan, "raw", "input.md"), "orphan evidence\n");
   writeFileSync(join(orphan, "records.jsonl"), "{}\n");
@@ -410,7 +497,7 @@ test("CLI doctor rejects Source metadata drift from the ledger", () => {
   writeFileSync(input, "# Evidence\n");
   runCli(home, fakeUserHome, ["init"]);
   const imported = runCli(home, fakeUserHome, ["source", "ingest", input, "--kind", "document", "--scope", "work"]);
-  const metadataPath = join(home, "sources", imported.source.id, "source.json");
+  const metadataPath = join(resolveSourcesRoot(home), imported.source.id, "source.json");
   const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
   metadata.scope = "personal";
   metadata.sensitivity = "public";
@@ -433,11 +520,11 @@ test("history retry reconciles a Source written before its ledger event", () => 
   runCli(home, fakeUserHome, ["init"]);
   const interrupted = ingestHistory(home, "claude", { root, scope: "work" });
   assert.equal(interrupted.imported, 1);
-  assert.equal(readFileSync(join(home, "ledger", "events.jsonl"), "utf8"), "");
+  assert.equal(readFileSync(resolveLedgerPath(home), "utf8"), "");
 
   const retried = runCli(home, fakeUserHome, ["source", "ingest-history", "--adapter", "claude", "--root", root, "--scope", "work"]);
   assert.equal(retried.skipped, 1);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "source.ingested").length, 1);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
 });
@@ -461,9 +548,34 @@ test("CLI incremental ingest appends only a delta and records the scan state", (
   assert.equal(second.deltaCount, 1);
   assert.equal(second.duplicateCount, 1);
   assert.equal(second.source.recordCount, 1);
-  const events = readFileSync(join(home, "ledger", "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
+  const events = readFileSync(resolveLedgerPath(home), "utf8").trim().split("\n").map((line) => JSON.parse(line) as EventRecord);
   assert.equal(events.filter((event) => event.eventType === "source.incremental_scan").length, 2);
   assert.equal(runCli(home, fakeUserHome, ["doctor"]).ok, true);
+});
+
+test("CLI search and context reject unbounded or malformed result limits", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-bounded-retrieval-cli-"));
+  const home = join(sandbox, "ikb-data");
+  const fakeUserHome = join(sandbox, "fake-home");
+  mkdirSync(fakeUserHome, { recursive: true });
+  runCli(home, fakeUserHome, ["init"]);
+  for (const suffix of ["one", "two", "three"]) {
+    runCli(home, fakeUserHome, ["capture", `bounded retrieval ${suffix}`, "--title", `Bounded ${suffix}`, "--scope", "personal"]);
+  }
+
+  const limited = runCli(home, fakeUserHome, ["search", "bounded retrieval", "--scope", "personal", "--limit", "2"]);
+  assert.equal(limited.length, 2);
+  for (const invalid of ["0", "1.5", "51", "not-a-number"]) {
+    const result = invokeCli(home, fakeUserHome, ["search", "bounded retrieval", "--scope", "personal", "--limit", invalid]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--limit must be an integer from 1 to 50/);
+  }
+
+  const task = runCli(home, fakeUserHome, ["task", "add", "--title", "Context limit", "--goal", "Bound context", "--accept", "Bounded", "--scope", "personal"]);
+  const run = runCli(home, fakeUserHome, ["run", "start", task.id, "--agent", "ikb-operator"]);
+  const invalidContext = invokeCli(home, fakeUserHome, ["context", task.id, "--run", run.id, "--scope", "personal", "--limit", "0"]);
+  assert.notEqual(invalidContext.status, 0);
+  assert.match(invalidContext.stderr, /--limit must be an integer from 1 to 50/);
 });
 
 function runCli(home: string, fakeUserHome: string, args: string[], envOverrides: Record<string, string> = {}): any {

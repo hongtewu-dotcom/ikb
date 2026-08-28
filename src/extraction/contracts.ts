@@ -1,7 +1,59 @@
-export const EXTRACTION_MANIFEST_VERSION = "ikb-knowledge-extraction-benchmark.v2";
-export const EXTRACTION_RESULT_VERSION = "ikb-knowledge-compilation-result.v2";
-export const EXTRACTION_VALIDATION_VERSION = "ikb-knowledge-extraction-validation.v2";
-export const EXTRACTION_FIDELITY_VERSION = "ikb-knowledge-fidelity-report.v1";
+export const LEGACY_EXTRACTION_MANIFEST_VERSION = "ikb-knowledge-extraction-benchmark.v2";
+export const LEGACY_EXTRACTION_RESULT_VERSION = "ikb-knowledge-compilation-result.v2";
+export const EXTRACTION_MANIFEST_VERSION = "ikb-knowledge-extraction-benchmark.v3";
+export const EXTRACTION_RESULT_VERSION = "ikb-knowledge-compilation-result.v3";
+export const EXTRACTION_VALIDATION_VERSION = "ikb-knowledge-extraction-validation.v3";
+export const EXTRACTION_FIDELITY_VERSION = "ikb-knowledge-fidelity-report.v2";
+
+export const SUPPORTED_EXTRACTION_MANIFEST_VERSIONS = new Set([
+  LEGACY_EXTRACTION_MANIFEST_VERSION,
+  EXTRACTION_MANIFEST_VERSION,
+]);
+
+export const SOURCE_UNIT_KINDS = new Set([
+  "section",
+  "paragraph",
+  "table",
+  "image",
+  "diagram",
+  "attachment",
+  "comment",
+  "message",
+  "tool_result",
+  "diff",
+  "test",
+  "other",
+]);
+
+export const SOURCE_UNIT_DISPOSITIONS = new Set([
+  "extracted",
+  "context_only",
+  "duplicate",
+  "no_durable_value",
+  "unreadable",
+  "blocked",
+]);
+
+export const REFERENCE_FACT_DISPOSITIONS = new Set([
+  "preserved",
+  "paraphrased",
+  "aggregated",
+  "view_omitted",
+  "gap",
+  "conflicted",
+  "discarded",
+  "lost",
+]);
+
+export const CLAIM_SUPPORT_STATUSES = new Set([
+  "supported",
+  "partially_supported",
+  "contradicted",
+  "unsupported",
+]);
+
+export const QUESTION_DISPOSITIONS = new Set(["answered", "gap", "not_applicable"]);
+export const PRODUCT_OPERATIONS = new Set(["new", "revise", "merge"]);
 
 export type JsonObject = Record<string, unknown>;
 
@@ -24,6 +76,7 @@ export interface ExtractionValidationReport {
 export interface ExtractionFidelityVerdict {
   caseId: string;
   disposition: "admit" | "skip" | "invalid";
+  legacy: boolean;
   publishable: boolean;
   checks: {
     evidenceIntegrity: boolean;
@@ -31,7 +84,29 @@ export interface ExtractionFidelityVerdict {
     claimSupport: boolean;
     typeShape: boolean;
     personSelectivity: boolean;
+    sourceCompleteness: boolean;
+    informationLoss: boolean;
+    minimalSufficiency: boolean;
   };
+  metrics: ExtractionInformationLossMetrics;
+}
+
+export interface ExtractionInformationLossMetrics {
+  sourceUnitDispositionRate: number | null;
+  sourceUnitExtractionRate: number | null;
+  materialSourceUnitExtractionRate: number | null;
+  blockedSourceUnitCount: number;
+  coreFactRecall: number | null;
+  supportingFactDispositionRate: number | null;
+  viewFactRetention: number | null;
+  viewCoreFactRetention: number | null;
+  claimSupportPrecision: number | null;
+  questionCoverage: number | null;
+  conflictExposure: number | null;
+  semanticLoss: number | null;
+  sourceCharacterCount: number | null;
+  knowledgeCharacterCount: number | null;
+  compressionRatio: number | null;
 }
 
 export interface ExtractionFidelityReport {
@@ -86,6 +161,7 @@ export const PRODUCT_TYPES = new Set([
   "entry_index",
   "service_data_fact",
   "decision_card",
+  "principle_card",
   "playbook",
   "lesson",
   "project_goal",
@@ -105,6 +181,7 @@ export const MODE_PRODUCTS: Record<string, string[]> = {
   flow_entry: ["flow_card", "entry_index", "architecture_map"],
   service_data_fact: ["service_data_fact"],
   decision: ["decision_card"],
+  principle: ["principle_card"],
   playbook: ["playbook"],
   lesson: ["lesson"],
   project_goal: ["project_goal"],

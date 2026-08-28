@@ -96,6 +96,12 @@ export interface KnowledgeRecord {
   scope: string;
   sensitivity: string;
   status: KnowledgeStatus;
+  /** Monotonic local revision. Missing legacy values are read as revision 1. */
+  revision: number;
+  /** Relative journal refs for immutable before/after snapshots. */
+  revisionHistory: string[];
+  /** Set on retired cards merged into a surviving Knowledge id. */
+  supersededBy?: string;
   sourceRefs: string[];
   validFrom: string;
   reviewAfter: string;
@@ -107,7 +113,15 @@ export interface KnowledgeRecord {
   qualityVersion: number;
   /** v4: the typed consumer view produced from a fact-preserving compilation. */
   productType?: string;
+  /** v5: stable semantic identity; only one active Knowledge may own a key. */
+  canonicalKey?: string;
+  /** v5: exact low-loss compilation contract and selected product. */
+  compilationSchema?: string;
+  compilationCaseId?: string;
+  compilationProductId?: string;
+  extractionManifestRef?: string;
   compilationRef?: string;
+  informationLossRef?: string;
   factRefs?: string[];
   questionsAnswered?: string[];
   admissionReason: string;
@@ -157,6 +171,13 @@ export interface SourceRecord {
   format: "jsonl" | "markdown";
   originalPath: string;
   rawPath: string;
+  /** Missing legacy values mean a managed immutable copy under the Source. */
+  rawStorage?: "managed" | "external" | "evidence";
+  /** Snapshot boundary observed in the external owner at intake time. */
+  originBytes?: number;
+  originModifiedAt?: string;
+  /** Set only by an explicit, ledgered storage migration. */
+  externalizedAt?: string;
   recordsPath: string;
   contentHash: string;
   recordsHash?: string;
@@ -235,7 +256,13 @@ export interface KnowledgeSearchResult {
   score: number;
   snippet: string;
   productType?: string;
+  canonicalKey?: string;
+  compilationSchema?: string;
+  compilationCaseId?: string;
+  compilationProductId?: string;
+  extractionManifestRef?: string;
   compilationRef?: string;
+  informationLossRef?: string;
   factRefs?: string[];
   questionsAnswered?: string[];
   doNotUseFor?: string[];
@@ -245,4 +272,18 @@ export interface KnowledgeSearchResult {
   useSteps?: string[];
   useChecks?: string[];
   useStopConditions?: string[];
+}
+
+export type KnowledgeRetrievalUnitKind = "question" | "fact" | "claim" | "section" | "step" | "check" | "stop_condition" | "boundary" | "card";
+
+export interface KnowledgeRetrievalUnit {
+  unitId: string;
+  knowledgeId: string;
+  kind: KnowledgeRetrievalUnitKind;
+  label: string;
+  text: string;
+  score: number;
+  matchedQuestion: string;
+  factRefs?: string[];
+  truncated?: boolean;
 }

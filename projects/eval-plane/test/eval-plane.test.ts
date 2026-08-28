@@ -11,7 +11,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("the unified registry keeps the legacy twelve cases and exposes versioned adapter suites", () => {
   const registry = createDefaultEvalRegistry();
   const suites = registry.listSuites();
-  assert.equal(suites.length, 9);
+  assert.equal(suites.length, 10);
   assert.equal(suites.filter((suite) => suite.adapter === "ikb" && suite.kind === "regression").flatMap((suite) => suite.cases).length, 12);
   assert.equal(new Set(suites.filter((suite) => suite.adapter === "ikb" && suite.kind === "regression").flatMap((suite) => suite.cases)).size, 12);
   assert.deepEqual(suites.map((suite) => suite.suiteId), [
@@ -24,10 +24,16 @@ test("the unified registry keeps the legacy twelve cases and exposes versioned a
     "pipeline-contract",
     "ikb-run-quality",
     "work-run-quality",
+    "specx-change-quality",
   ]);
   assert.equal(registry.getSuite("ikb-run-quality").kind, "run_assessment");
   assert.equal(registry.getSuite("work-run-quality").kind, "run_assessment");
   assert.equal(registry.getSuite("work-run-quality").suiteVersion, "v4");
+  assert.deepEqual(registry.getSuite("specx-change-quality").requiredCaseIds, [
+    "specx-source-integrity",
+    "specx-evidence-provenance",
+    "specx-flight-outcome",
+  ]);
 });
 
 test("duplicate Suite id and version is rejected", () => {

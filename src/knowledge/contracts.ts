@@ -1,9 +1,29 @@
 import type { KnowledgeConfidence, KnowledgeTemporalState, KnowledgeVerification } from "../types.ts";
 
 export const KNOWLEDGE_DIRECTORIES = [
-  "domains", "projects", "people", "concepts", "decisions", "playbooks", "lessons", "syntheses",
+  "domains", "projects", "people", "concepts", "decisions", "principles", "playbooks", "lessons", "syntheses",
 ] as const;
 export type KnowledgeDirectory = typeof KNOWLEDGE_DIRECTORIES[number];
+
+/**
+ * Formal Knowledge types that the Experience -> Candidate lifecycle can
+ * propose.  The repository still reads legacy free-form types, but a new
+ * Candidate must choose one explicit consumer-facing type instead of falling
+ * back to a generic lesson or synthesis.
+ */
+export const KNOWLEDGE_CANDIDATE_TYPES = [
+  "architecture",
+  "decision",
+  "entity",
+  "fact",
+  "goal",
+  "lesson",
+  "playbook",
+  "preference",
+  "principle",
+  "synthesis",
+] as const;
+export type KnowledgeCandidateType = typeof KNOWLEDGE_CANDIDATE_TYPES[number];
 
 export interface KnowledgeMigrationItem {
   id: string;
@@ -50,17 +70,24 @@ export interface KnowledgeLayoutInspection {
   invalidFiles: string[];
   scopeMismatchFiles: string[];
   pendingMigrationJournals: string[];
+  pendingRevisionJournals: string[];
   qualityIssues: KnowledgeQualityIssue[];
 }
 
 export type KnowledgeQualityIssueCode =
   | "body_empty" | "literal_escaped_newline" | "source_refs_missing"
+  | "revision_invalid" | "revision_history_invalid" | "superseded_by_invalid"
   | "admission_reason_missing" | "applicability_missing" | "boundary_missing"
   | "verified_source_refs_missing" | "confidence_invalid" | "confidence_basis_missing"
   | "temporal_state_invalid" | "verification_invalid" | "use_when_missing"
   | "use_inputs_missing" | "use_outputs_missing" | "use_steps_missing"
   | "use_checks_missing" | "use_stop_conditions_missing"
   | "product_type_missing" | "compilation_ref_missing" | "fact_refs_missing"
+  | "canonical_key_missing" | "canonical_key_scope_mismatch"
+  | "compilation_schema_missing" | "compilation_schema_unsupported"
+  | "compilation_case_id_missing" | "compilation_product_id_missing"
+  | "extraction_manifest_ref_missing" | "information_loss_ref_missing"
+  | "active_canonical_key_duplicate"
   | "questions_answered_missing" | "person_do_not_use_for_missing"
   | "person_counterevidence_search_missing" | "person_source_count_insufficient"
   | "person_date_count_insufficient"
@@ -80,7 +107,13 @@ export type KnowledgeQualityIssueCode =
   | "personal_lesson_verification_insufficient"
   | "personal_synthesis_fact_refs_insufficient"
   | "personal_synthesis_verification_insufficient"
-  | "personal_fact_confidence_insufficient";
+  | "personal_fact_confidence_insufficient"
+  | "principle_quality_version_insufficient"
+  | "principle_product_type_mismatch"
+  | "principle_verification_insufficient"
+  | "memory_topic_confidence_insufficient"
+  | "memory_topic_temporal_state_unresolved"
+  | "principle_confirmation_chain_invalid";
 
 export interface KnowledgeQualityIssue {
   knowledgeId: string;
@@ -105,7 +138,13 @@ export interface KnowledgeInput {
   contradicts?: string[];
   qualityVersion?: number;
   productType?: string;
+  canonicalKey?: string;
+  compilationSchema?: string;
+  compilationCaseId?: string;
+  compilationProductId?: string;
+  extractionManifestRef?: string;
   compilationRef?: string;
+  informationLossRef?: string;
   factRefs?: string[];
   questionsAnswered?: string[];
   admissionReason?: string;

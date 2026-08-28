@@ -14,5 +14,8 @@
     "ikb": "node --no-warnings=ExperimentalWarning --experimental-strip-types src/cli.ts",
     "test": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts",
     "check": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts"
+  },
+  "dependencies": {
+    "yaml": "2.8.2"
   }
 }

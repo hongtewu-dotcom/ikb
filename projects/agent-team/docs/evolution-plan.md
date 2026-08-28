@@ -169,7 +169,11 @@ IKB 源码和历史评测不删除。
 
 ## 后续演进
 
-先积累真实任务，不继续扩功能。每个样本记录最终质量、人工纠偏、墙钟、主子线程总 token、spawn/wait/interrupt、父子重复读取、writer 冲突和 review 快照漂移。
+IKB Harness 已接入自动遥测和带证据 Campaign。每 6 小时采集已安装 2.0.0 的终态 turn，记录墙钟、主子线程总 token 和原生协作调用；最终质量、人工纠偏、期望 spawn、writer 冲突和 review 快照漂移必须由证据标签补齐。父子重复读取缺少宿主结构化 read target，当前保持 unknown。
+
+首轮正式 Campaign 有 3 组成对案例、6 条 Observation：5 次 spawn 判断正确，1 次基线误 spawn；两组 L1 都无失败，L3 都是 100%，候选平均 token 低 27.62%、墙钟低 10.71%。终态仍是 inconclusive，因为质量改善没有被证明。
+
+后续先积累真实任务，不继续扩功能。
 
 只有出现以下重复信号才改：
 

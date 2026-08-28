@@ -73,6 +73,7 @@ function adapterResult(testCase: EvalCase, suite: EvalSuite, runId: string, proj
   const subject = suppliedSubject ?? adapter.load(readFixture(projectRoot, testCase));
   if (subject.adapter !== testCase.adapter) throw new Error(`EvalSubject adapter mismatch: expected ${testCase.adapter}, got ${subject.adapter}`);
   const evaluated = adapter.evaluate(testCase, subject, suite.thresholds);
+  const status = evaluated.status ?? (evaluated.passed ? "pass" : "fail");
   return validateEvalResult({
     schema: EVAL_RESULT_SCHEMA,
     evalVersion: EVAL_VERSION,
@@ -86,7 +87,7 @@ function adapterResult(testCase: EvalCase, suite: EvalSuite, runId: string, proj
     level: testCase.level,
     expected: testCase.expected.outcome,
     observed: evaluated.observed,
-    status: evaluated.passed ? "pass" : "fail",
+    status,
     reasonCodes: evaluated.reasonCodes,
     metrics: evaluated.metrics,
     evidenceRefs: evaluated.evidenceRefs,
@@ -100,7 +101,7 @@ export function buildEvalReport(suite: EvalSuite, results: EvalResult[], runId: 
   const levelReports = levels.filter((level) => suite.levels.includes(level)).map((level) => {
     const levelResults = results.filter((result) => result.level === level);
     const reasonCodes: Record<string, number> = {};
-    for (const result of levelResults.filter((item) => item.status === "fail")) {
+    for (const result of levelResults.filter((item) => item.status !== "pass")) {
       for (const code of result.reasonCodes) reasonCodes[code] = (reasonCodes[code] ?? 0) + 1;
     }
     return {
@@ -109,13 +110,25 @@ export function buildEvalReport(suite: EvalSuite, results: EvalResult[], runId: 
       passedCases: levelResults.filter((result) => result.status === "pass").length,
       failedCases: levelResults.filter((result) => result.status === "fail").length,
       failedCaseIds: levelResults.filter((result) => result.status === "fail").map((result) => result.caseId),
+      ...(levelResults.some((result) => result.status === "inconclusive") ? {
+        inconclusiveCases: levelResults.filter((result) => result.status === "inconclusive").length,
+        inconclusiveCaseIds: levelResults.filter((result) => result.status === "inconclusive").map((result) => result.caseId),
+      } : {}),
       reasonCodes,
     };
   });
+  const hasRequiredCases = suite.requiredCaseIds !== undefined;
+  const requiredResultsPassed = hasRequiredCases
+    ? suite.requiredCaseIds!.length > 0 && suite.requiredCaseIds!.every((caseId) => {
+      const matches = results.filter((result) => result.caseId === caseId);
+      return matches.length === 1 && matches[0].status === "pass";
+    })
+    : undefined;
   const levelOnePassed = results.filter((result) => result.level === "L1").every((result) => result.status === "pass");
   const requiredDomainGatesPassed = results
     .filter((result) => result.caseId === "work-run-domain-result" && result.metrics.required === true)
     .every((result) => result.status === "pass");
+  const hardGatePassed = hasRequiredCases ? requiredResultsPassed === true : levelOnePassed && requiredDomainGatesPassed;
   return {
     schema: EVAL_REPORT_SCHEMA,
     evalVersion: EVAL_VERSION,
@@ -127,7 +140,7 @@ export function buildEvalReport(suite: EvalSuite, results: EvalResult[], runId: 
     runId,
     ...(subject?.subjectVersion ? { subjectVersion: subject.subjectVersion } : {}),
     ...(subject?.subjectHash ? { subjectHash: subject.subjectHash } : {}),
-    hardGatePassed: levelOnePassed && requiredDomainGatesPassed,
+    hardGatePassed,
     levels: levelReports,
     results,
   };
@@ -152,7 +165,7 @@ export interface EvalComparison {
   suiteId: string;
   beforeRunId: string;
   afterRunId: string;
-  changedCases: Array<{ caseId: string; before: EvalResult["status"]; after: EvalResult["status"]; beforeReasons: string[]; afterReasons: string[] }>;
+  changedCases: Array<{ caseId: string; before: EvalResult["status"] | "missing"; after: EvalResult["status"]; beforeReasons: string[]; afterReasons: string[] }>;
   newlyPassing: string[];
   newlyFailing: string[];
   unchanged: string[];
@@ -168,15 +181,15 @@ export function compareEvalResults(before: EvalResult[], after: EvalResult[]): E
   for (const [caseId, next] of afterById) {
     const previous = beforeById.get(caseId);
     if (!previous) {
-      changedCases.push({ caseId, before: "fail", after: next.status, beforeReasons: ["case_not_in_before"], afterReasons: next.reasonCodes });
+      changedCases.push({ caseId, before: "missing", after: next.status, beforeReasons: ["case_not_in_before"], afterReasons: next.reasonCodes });
       if (next.status === "pass") newlyPassing.push(caseId);
       continue;
     }
     if (previous.status === next.status && previous.reasonCodes.join("|") === next.reasonCodes.join("|")) unchanged.push(caseId);
     else {
       changedCases.push({ caseId, before: previous.status, after: next.status, beforeReasons: previous.reasonCodes, afterReasons: next.reasonCodes });
-      if (previous.status === "fail" && next.status === "pass") newlyPassing.push(caseId);
-      if (previous.status === "pass" && next.status === "fail") newlyFailing.push(caseId);
+      if (previous.status !== "pass" && next.status === "pass") newlyPassing.push(caseId);
+      if (previous.status !== "fail" && next.status === "fail") newlyFailing.push(caseId);
     }
   }
   const first = after[0] ?? before[0];

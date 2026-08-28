@@ -4,7 +4,13 @@ import { join, resolve } from "node:path";
 import { listCandidates } from "./candidates.ts";
 import { listKnowledge } from "./knowledge.ts";
 import { listSources } from "./source.ts";
-import { listExperienceRecords, type ExperienceRecord } from "./experience.ts";
+import { listExperienceCandidates, listExperienceRecords, type ExperienceKnowledgeCandidate, type ExperienceRecord } from "./experience.ts";
+import {
+  inspectCurrentExperienceReviewPackage,
+  writeExperienceCandidateConfirmationBatch,
+  type ExperienceReviewInspection,
+} from "./experience-review.ts";
+import { listKnowledgeReviewHolds } from "./knowledge/holds.ts";
 import type { LedgerStore } from "./store.ts";
 import type { KnowledgeRecord, SourceRecord } from "./types.ts";
 
@@ -15,10 +21,10 @@ import type { KnowledgeRecord, SourceRecord } from "./types.ts";
  * be handled by an IKB rule, which need a future task, and which truly need a
  * human decision.
  */
-export const REASONING_VERSION = "ikb-reasoning.v1";
+export const REASONING_VERSION = "ikb-reasoning.v2";
 
 export type ReasoningDisposition = "auto_resolved" | "defer_until_task" | "ask_user";
-export type ReasoningCategory = "boundary" | "evidence" | "person" | "policy" | "sensitivity" | "unknown";
+export type ReasoningCategory = "boundary" | "evidence" | "person" | "policy" | "knowledge_candidate" | "sensitivity" | "unknown";
 
 export interface ReasoningQuestion {
   id: string;
@@ -33,6 +39,16 @@ export interface ReasoningQuestion {
   rationale: string;
   nextAction: string;
   sourceRefs: string[];
+  candidateId?: string;
+  candidateMode?: "new" | "revision";
+  reviewPackage?: {
+    id: string;
+    primaryHumanReviewPath: string;
+    humanReviewItemKey: string;
+    guidePath: string;
+    draftPath: string | null;
+    validationPaths: string[];
+  };
 }
 
 export interface ReasoningDecisionBundle {
@@ -68,6 +84,9 @@ export interface ReasoningReport {
     experienceSignals: Record<string, number>;
     candidates: number;
     candidateStatus: Record<string, number>;
+    experienceCandidates: number;
+    experienceCandidateStatus: Record<string, number>;
+    knowledgeHolds: number;
     knowledgeTotal: number;
     knowledgeActive: number;
     knowledgeDraft: number;
@@ -104,17 +123,59 @@ export function runReasoning(home: string, store: LedgerStore, options: Reasonin
   const now = options.now ?? new Date();
   const sources = listSources(home).filter((source) => source.scope === scope);
   const activeSourceIds = new Set(sources.map((source) => source.id));
-  const experiences = listExperienceRecords(home, scope).filter((record) => record.sourceIds.length === 0 || record.sourceIds.every((sourceId) => activeSourceIds.has(sourceId)));
+  const experiences = listExperienceRecords(home, scope)
+    .filter((record) => record.triageDisposition !== "ignored")
+    .filter((record) => record.sourceIds.length === 0 || record.sourceIds.every((sourceId) => activeSourceIds.has(sourceId)));
   const candidates = listCandidates(home).filter((candidate) => candidate.scope === scope && (candidate.origin.sourceIds.length === 0 || candidate.origin.sourceIds.every((sourceId) => activeSourceIds.has(sourceId))));
+  const experienceCandidates = listExperienceCandidates(home, scope);
+  const experienceReviews = new Map(experienceCandidates.map((candidate) => [candidate.id, inspectCurrentExperienceReviewPackage(home, store, candidate)]));
+  const previousConfirmationKeys = new Map((readLatestReasoning(home, scope)?.userDecisionQueue ?? []).flatMap((question) => {
+    const key = question.reviewPackage?.humanReviewItemKey;
+    return question.candidateId && key ? [[question.candidateId, key] as const] : [];
+  }));
+  const pendingExperienceCandidates = experienceCandidates
+    .filter((candidate) => candidate.status === "pending_review")
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  const readyConfirmationEntries = pendingExperienceCandidates.flatMap((candidate) => {
+    const review = experienceReviews.get(candidate.id) ?? { package: null, issues: [] };
+    return experienceCandidateReviewBlockers(candidate, review).length === 0 && review.package
+      ? [{ candidate, review: review.package, key: previousConfirmationKeys.get(candidate.id) }]
+      : [];
+  }).slice(0, 3);
+  const confirmationBatch = readyConfirmationEntries.length > 0
+    ? writeExperienceCandidateConfirmationBatch(home, readyConfirmationEntries)
+    : null;
+  const confirmationItems = new Map((confirmationBatch?.items ?? []).map((item) => [item.candidateId, {
+    key: item.key,
+    path: confirmationBatch!.brief.path,
+  }]));
+  const knowledgeHolds = listKnowledgeReviewHolds(home).filter((hold) => experienceCandidates.some((candidate) => candidate.id === hold.candidateId));
   const knowledge = listKnowledge(home, scope);
   const activeKnowledge = knowledge.filter((record) => record.status !== "retired");
   const draftQuestions = activeKnowledge.flatMap(extractQuestions);
-  const classified = draftQuestions.map(classifyQuestion);
+  const classified = [
+    ...draftQuestions.map(classifyQuestion),
+    ...pendingExperienceCandidates.map((candidate) => experienceCandidateQuestion(
+      candidate,
+      experienceReviews.get(candidate.id) ?? { package: null, issues: [] },
+      confirmationItems.get(candidate.id),
+    )),
+  ];
   const inputFingerprint = sha256(JSON.stringify({
+    reasoningVersion: REASONING_VERSION,
     scope,
     sources: sources.map((source) => [source.id, source.contentHash, source.recordsHash ?? null]),
     experiences: experiences.map((record) => [record.id, record.updatedAt, record.status, record.signalCodes]),
     candidates: candidates.map((candidate) => [candidate.id, candidate.revision, candidate.status]),
+    experienceCandidates: experienceCandidates.map((candidate) => [candidate.id, candidate.contentHash, candidate.status, candidate.decision?.candidateContentHash ?? null]),
+    experienceReviews: experienceCandidates.map((candidate) => {
+      const review = experienceReviews.get(candidate.id);
+      return [candidate.id, review?.package?.package.id ?? null, review?.package?.package.draftContentHash ?? null, review?.package?.package.guideContentHash ?? null, review?.issues ?? []];
+    }),
+    confirmationBatch: confirmationBatch
+      ? [confirmationBatch.brief.id, confirmationBatch.brief.contentHash, confirmationBatch.items.map((item) => [item.candidateId, item.key])]
+      : null,
+    knowledgeHolds: knowledgeHolds.map((hold) => [hold.candidateId, hold.knowledgeId]),
     knowledge: activeKnowledge.map((record) => [record.id, record.status, record.path, sha256(record.body)]),
     questions: classified.map((question) => [question.id, question.disposition, question.category]),
   }));
@@ -123,6 +184,8 @@ export function runReasoning(home: string, store: LedgerStore, options: Reasonin
   ensureDirectory(root);
   const jsonPath = join(root, `${reportId}.json`);
   const markdownPath = join(root, `${reportId}.md`);
+  const userDecisionQueue = classified.filter((question) => question.disposition === "ask_user");
+  const onlyKnowledgeCandidates = userDecisionQueue.length > 0 && userDecisionQueue.every((question) => question.category === "knowledge_candidate");
   const report: ReasoningReport = {
     schema: REASONING_VERSION,
     id: reportId,
@@ -138,6 +201,9 @@ export function runReasoning(home: string, store: LedgerStore, options: Reasonin
       experienceSignals: countSignals(experiences),
       candidates: candidates.length,
       candidateStatus: countBy(candidates, (candidate) => candidate.status),
+      experienceCandidates: experienceCandidates.length,
+      experienceCandidateStatus: countBy(experienceCandidates, (candidate) => candidate.status),
+      knowledgeHolds: knowledgeHolds.length,
       knowledgeTotal: knowledge.length,
       knowledgeActive: activeKnowledge.length,
       knowledgeDraft: activeKnowledge.filter((record) => record.status === "draft").length,
@@ -152,14 +218,16 @@ export function runReasoning(home: string, store: LedgerStore, options: Reasonin
       deferred: classified.filter((question) => question.disposition === "defer_until_task").length,
       askUser: classified.filter((question) => question.disposition === "ask_user").length,
       immediateConfirmationRequired: classified.some((question) => question.disposition === "ask_user"),
-      note: classified.some((question) => question.disposition === "ask_user")
-        ? "只有人物稳定观察、Approval/门禁、生产阈值和组织策略等不可由当前证据推出的事项进入用户队列。"
+      note: userDecisionQueue.length > 0
+        ? onlyKnowledgeCandidates
+          ? "全局报告不提前追问尚未进入真实任务的 Draft 缺口；当前用户队列只保留已经达到证据门槛、完成本地内容验证，但系统禁止自动落库的 Knowledge Candidate。"
+          : "全局报告不提前追问尚未进入真实任务的证据缺口；当前用户队列只保留系统禁止自动决定的人物边界或 Knowledge Candidate。"
         : "当前没有必须立即让用户确认的事项；其余问题按既有边界自动处理或延后到具体 Task。",
     },
     autoResolved: classified.filter((question) => question.disposition === "auto_resolved"),
     deferred: classified.filter((question) => question.disposition === "defer_until_task"),
-    userDecisionQueue: classified.filter((question) => question.disposition === "ask_user"),
-    decisionBundles: buildDecisionBundles(classified.filter((question) => question.disposition === "ask_user")),
+    userDecisionQueue,
+    decisionBundles: buildDecisionBundles(userDecisionQueue),
     paths: { json: jsonPath, markdown: markdownPath },
   };
   writeJson(jsonPath, report);
@@ -208,14 +276,15 @@ export function renderReasoningMarkdown(report: ReasoningReport): string {
     "",
     report.summary.note,
     "",
-    `抽取到 ${report.summary.questionsExtracted} 个旧 Draft 确认项：自动处理 ${report.summary.autoResolved} 个，延后取证 ${report.summary.deferred} 个，真正需要用户确认 ${report.summary.askUser} 个。`,
+    `汇总 ${report.summary.questionsExtracted} 个 Knowledge 草稿问题或候选决策：自动处理 ${report.summary.autoResolved} 个，延后取证 ${report.summary.deferred} 个，真正需要用户确认 ${report.summary.askUser} 个。`,
     "",
     "## 输入覆盖",
     "",
-    `- Source：${report.inputs.sources}；Experience：${report.inputs.experiences}；Candidate：${report.inputs.candidates}`,
+    `- Source：${report.inputs.sources}；Experience：${report.inputs.experiences}；来源 Candidate：${report.inputs.candidates}；Knowledge Candidate：${report.inputs.experienceCandidates}；暂停召回：${report.inputs.knowledgeHolds}`,
     `- Knowledge：总计 ${report.inputs.knowledgeTotal}，当前 ${report.inputs.knowledgeActive}，Draft ${report.inputs.knowledgeDraft}，Verified ${report.inputs.knowledgeVerified}，Retired ${report.inputs.knowledgeRetired}`,
     `- Experience 状态：${formatCounts(report.inputs.experienceStatus) || "无"}`,
     `- Candidate 状态：${formatCounts(report.inputs.candidateStatus) || "无"}`,
+    `- Knowledge Candidate 状态：${formatCounts(report.inputs.experienceCandidateStatus) || "无"}`,
     "",
     "## 系统原则判断",
     "",
@@ -233,9 +302,13 @@ export function renderReasoningMarkdown(report: ReasoningReport): string {
   if (report.decisionBundles.length === 0) lines.push("当前没有必须立即确认的事项。", "");
   for (const bundle of report.decisionBundles) {
     lines.push(`### ${bundle.title}`, "", `- 决策项：${bundle.itemCount} 个`, `- 影响：${bundle.consequence}`, "- 具体问题：");
-    for (const question of report.userDecisionQueue.filter((item) => bundle.questionIds.includes(item.id))) {
-      lines.push(`  - ${question.knowledgeTitle} #${question.number}：${question.text}`);
+    const questions = report.userDecisionQueue.filter((item) => bundle.questionIds.includes(item.id));
+    for (const question of questions) {
+      const key = question.reviewPackage?.humanReviewItemKey;
+      lines.push(`  - ${key ? `${key}. ` : ""}${question.knowledgeTitle} #${question.number}：${question.text}`);
     }
+    const reviewPaths = [...new Set(questions.flatMap((question) => question.reviewPackage ? [question.reviewPackage.primaryHumanReviewPath] : []))];
+    for (const path of reviewPaths) lines.push(`- ${markdownLink("统一确认入口", path)}`);
     lines.push("");
   }
   lines.push("## 数据边界", "", "本报告只保存引用、计数和确认项文本，不复制聊天长文本；不修改 Knowledge 生命周期，不读取未排队的远端候选，也不执行学城/大象写操作。", "");
@@ -257,14 +330,14 @@ function buildFindings(sources: SourceRecord[], knowledge: KnowledgeRecord[], ex
       title: "人物知识门槛高于普通业务知识",
       conclusion: "人物观察必须先通过身份、直接发言和独立 Episode 门禁；业务 playbook 可以先以 advisory draft 使用，但不能把人物观察当成稳定偏好。",
       confidence: "high",
-      evidenceRefs: ["docs/knowledge-extraction.md", "ikb-data/vaults/work/people/"],
+      evidenceRefs: ["docs/knowledge-extraction.md", "ikb-data/.system/cache/people/work/"],
     },
     {
       id: "defer-missing-evidence",
       title: "缺数据延后到任务取证",
       conclusion: `当前有 ${sources.length} 个已保存 Source、${experiences.length} 个 Experience 和 ${candidates.length} 个候选；“已保存”不等于“已深读”，最新配置、SOP 和真实验证应在具体 Task 中补齐。`,
       confidence: "high",
-      evidenceRefs: ["ikb-data/sources/", "ikb-data/experiences/", "docs/contracts.md"],
+      evidenceRefs: ["ikb-data/.system/sources/", "ikb-data/experiences/", "docs/contracts.md"],
     },
     {
       id: "advisory-first",
@@ -279,7 +352,7 @@ function buildFindings(sources: SourceRecord[], knowledge: KnowledgeRecord[], ex
 function extractQuestions(record: KnowledgeRecord): ReasoningQuestion[] {
   if (record.status === "retired") return [];
   const lines = readFileSync(record.path, "utf8").split(/\r?\n/);
-  const headingIndex = lines.findIndex((line) => /^##\s+.*(?:待确认|确认)/u.test(line));
+  const headingIndex = lines.findIndex((line) => /^##\s+待确认(?:[（(]|\s|$)/u.test(line));
   if (headingIndex < 0) return [];
   const items: Array<{ number: number; text: string }> = [];
   let current: { number: number; text: string } | null = null;
@@ -316,6 +389,75 @@ function extractQuestions(record: KnowledgeRecord): ReasoningQuestion[] {
 
 function classifyQuestion(question: ReasoningQuestion): ReasoningQuestion { return question; }
 
+function experienceCandidateQuestion(
+  candidate: ExperienceKnowledgeCandidate,
+  review: ExperienceReviewInspection,
+  humanReview?: { key: string; path: string },
+): ReasoningQuestion {
+  const correction = candidate.changeTypes.some((changeType) => changeType === "revise" || changeType === "retire");
+  const claim = (candidate.candidateKnowledge.claim ?? candidate.claimVariants.join("；")) || "候选包含多个主张，需先合并后再落库";
+  const target = candidate.targetKnowledgeIds.length > 0 ? `，涉及 ${candidate.targetKnowledgeIds.join("、")}` : "";
+  const reviewBlockers = experienceCandidateReviewBlockers(candidate, review);
+  const locallyReadyForHumanReview = reviewBlockers.length === 0;
+  const readyForHumanReview = locallyReadyForHumanReview && Boolean(humanReview);
+  const effectiveReviewBlockers = locallyReadyForHumanReview && !humanReview
+    ? ["本轮人工确认批次已达到 3 个主题上限"]
+    : reviewBlockers;
+  const reviewPackage = review.package && humanReview ? {
+    id: review.package.package.id,
+    primaryHumanReviewPath: humanReview.path,
+    humanReviewItemKey: humanReview.key,
+    guidePath: review.package.guide.path,
+    draftPath: review.package.draft?.path ?? null,
+    validationPaths: review.package.validations.map((artifact) => artifact.path),
+  } : undefined;
+  return {
+    id: `reason-q-${sha256(`candidate|${candidate.id}|${candidate.contentHash}`).slice(0, 12)}`,
+    knowledgeId: candidate.targetKnowledgeIds[0] ?? candidate.id,
+    knowledgeTitle: candidate.title,
+    collection: candidate.candidateKnowledge.collection,
+    number: 1,
+    text: correction
+      ? `是否接受这次知识修订方向${target}：${claim}`
+      : `是否允许把这个重复出现的经验整理成正式 Knowledge：${claim}`,
+    category: "knowledge_candidate",
+    disposition: readyForHumanReview ? "ask_user" : "defer_until_task",
+    risk: correction ? "high" : "medium",
+    rationale: readyForHumanReview
+      ? correction
+        ? "现有知识已出现直接反证，系统已暂停它进入 Agent 上下文；替代规则已完成本地内容验证，是否采用仍需要人工确认。"
+        : "重复证据已达到候选门槛并完成本地内容验证；正式 Knowledge 的主张和用途仍需人工确认。"
+      : `候选只进入了 Curator 队列，还没有整理到可以让用户判断的状态：${effectiveReviewBlockers.join("；")}。`,
+    nextAction: readyForHumanReview
+      ? `先打开统一确认入口并查看 ${humanReview!.key}；确认完整候选内容、适用范围和边界后，再接受或驳回 ${candidate.id}。`
+      : `由 Curator 补齐 ${effectiveReviewBlockers.join("、")}；完成本地验证并生成完整知识稿后再进入用户确认队列。`,
+    sourceRefs: [...candidate.sourceRecordRefs, ...candidate.evidenceEventIds, ...(review.package ? [review.package.package.guideArtifactId, ...(review.package.package.draftArtifactId ? [review.package.package.draftArtifactId] : []), ...review.package.package.validationArtifactIds] : [])],
+    candidateId: candidate.id,
+    candidateMode: correction ? "revision" : "new",
+    reviewPackage,
+  };
+}
+
+function experienceCandidateReviewBlockers(candidate: ExperienceKnowledgeCandidate, review: ExperienceReviewInspection): string[] {
+  const blockers: string[] = [];
+  const contract = candidate.candidateKnowledge;
+  if (candidate.validationRefs.length === 0) blockers.push("缺少候选主张的本地内容验证");
+  if (!contract.claim?.trim()) blockers.push("主张尚未合并");
+  if (candidate.sourceRecordRefs.length === 0 && candidate.evidenceEventIds.length === 0) blockers.push("缺少可回放证据引用");
+  const fields: Array<[string, string]> = [
+    ["适用范围", contract.applicability],
+    ["边界", contract.boundary],
+    ["使用契约", contract.useContract],
+    ["验证计划", contract.validationPlan],
+  ];
+  for (const [label, value] of fields) {
+    if (!value.trim() || /^需合并\s/u.test(value.trim())) blockers.push(`${label}尚未收敛`);
+  }
+  if (review.issues.length > 0) blockers.push(`评审包校验失败：${review.issues.join("；")}`);
+  else if (!review.package) blockers.push("缺少已登记的完整评审包");
+  return blockers;
+}
+
 function classify(record: KnowledgeRecord, raw: string): Pick<ReasoningQuestion, "category" | "disposition" | "risk" | "rationale" | "nextAction"> {
   const text = `${record.title} ${raw}`;
   const person = record.collection === "people" || /身份|直接消息|人物|偏好|画像|沟通策略|稳定观察/u.test(text);
@@ -334,19 +476,19 @@ function classify(record: KnowledgeRecord, raw: string): Pick<ReasoningQuestion,
     rationale: "人物身份、稳定观察或 Agent 使用边界不能仅靠文本相似度推出。",
     nextAction: "保持人物观察 draft；用户确认身份和适用范围后，才允许作为个性化准备规则。",
   };
+  if (externalAction) return {
+    category: "policy",
+    disposition: "defer_until_task",
+    risk: "high",
+    rationale: "外部写入确实需要 Approval，但当前没有一个即将执行的具体 Action；全局维护不提前索要空白授权。",
+    nextAction: "命中真实 Task 时先生成本地草稿，再为具体目标和内容哈希申请 Approval。",
+  };
   if (sensitivity) return {
     category: "sensitivity",
     disposition: "auto_resolved",
     risk: "low",
     rationale: "按默认最小披露原则处理，未获明确授权不扩写账号、金额拆分或代理商细节。",
     nextAction: "保留敏感字段 unknown；只有具体 Task 明确授权时才局部读取。",
-  };
-  if (externalAction) return {
-    category: "policy",
-    disposition: "ask_user",
-    risk: "high",
-    rationale: "Issue、评论、发布或其他外部写入会产生副作用，不能由推理层默认为允许。",
-    nextAction: "先生成本地草稿或 Issue 候选；真正写入前单独申请 Approval。",
   };
   // A declarative boundary such as “案例数字不作为阈值” is already a
   // system rule.  Only a question or an explicit governance instruction is
@@ -360,10 +502,10 @@ function classify(record: KnowledgeRecord, raw: string): Pick<ReasoningQuestion,
   };
   if (policy && (questionLike || /Approval|审批|门禁|必须阻断|组织/u.test(text))) return {
     category: "policy",
-    disposition: "ask_user",
+    disposition: "defer_until_task",
     risk: "high",
-    rationale: "Approval、门禁、阈值和阻断策略会改变后续行为，当前材料不能代替用户或组织决策。",
-    nextAction: "进入压缩后的用户决策包；未确认前只生成报告，不改变默认执行策略。",
+    rationale: "这是高风险策略缺口，但尚未绑定真实消费者、当前基线和拟执行动作；现在确认容易变成脱离场景的永久规则。",
+    nextAction: "命中具体 Task 后补当前证据，给出建议和影响，再请求一次有上下文的决策。",
   };
   if (boundary) return {
     category: "boundary",
@@ -403,7 +545,15 @@ function buildDecisionBundles(questions: ReasoningQuestion[]): ReasoningDecision
     groups.set(question.category, list);
   }
   return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([category, items]) => {
-    const config = category === "person"
+    const candidateModes = new Set(items.map((item) => item.candidateMode).filter(Boolean));
+    const candidateConsequence = candidateModes.size === 1 && candidateModes.has("new")
+      ? "不确认则候选保留在评审队列，不会写入 Vault；现有 Knowledge 不受影响。"
+      : candidateModes.size === 1 && candidateModes.has("revision")
+      ? "不确认则旧知识继续暂停召回，候选也不会写入 Vault。"
+      : "不确认则新增候选不会写入 Vault；修订候选对应的旧知识继续暂停召回。";
+    const config = category === "knowledge_candidate"
+      ? { title: "Knowledge Candidate 是否进入正式知识", decision: "是否接受候选中的主张、适用范围和边界？", consequence: candidateConsequence }
+      : category === "person"
       ? { title: "人物身份、稳定观察与使用边界", decision: "是否确认人物身份、观察可重复性以及 Agent 使用范围？", consequence: "不确认则人物卡只保留为观察，不进入个性化沟通或任务策略。" }
       : { title: "高风险规则、Approval 与门禁", decision: "是否确认这些规则可以成为当前任务的默认门禁或 Approval 条件？", consequence: "不确认则只保留 advisory，遇到实际动作仍停在人工确认。" };
     return {
@@ -463,6 +613,10 @@ function countSignals(records: ExperienceRecord[]): Record<string, number> {
 
 function formatCounts(counts: Record<string, number>): string {
   return Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("，");
+}
+
+function markdownLink(label: string, path: string): string {
+  return `[${label}](<${path.replaceAll(">", "%3E")}>)`;
 }
 
 function sha256(value: string): string { return createHash("sha256").update(value).digest("hex"); }

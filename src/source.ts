@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { SourceContext, SourceKind, SourceMessage, SourceRecord } from "./types.ts";
+import { resolveSourcesRoot } from "./layout.ts";
 
 export interface SourceImportOptions {
   kind: SourceKind;
@@ -10,6 +11,9 @@ export interface SourceImportOptions {
   title?: string;
   scope?: string;
   sensitivity?: string;
+  rawStorage?: "managed" | "external" | "evidence";
+  originBytes?: number;
+  originModifiedAt?: string;
 }
 
 export interface SourceListOptions {
@@ -80,11 +84,64 @@ export function importSourceRecords(
   records: SourceMessage[],
   sourceId = makeSourceId(),
 ): { source: SourceRecord; records: SourceMessage[] } {
+  return persistSourceRecords(home, source, options, records, sourceId, hashSourceContent(content), (rawPath) => {
+    writeFileSync(rawPath, content, { mode: 0o600 });
+  });
+}
+
+/** Import a stable raw snapshot without materializing the whole file in a
+ * JavaScript string or Buffer. This is the default path for large Agent
+ * histories after their admitted rows have been streamed into staging. */
+export function importSourceFileRecords(
+  home: string,
+  source: string,
+  rawInputPath: string,
+  options: SourceImportOptions,
+  records: SourceMessage[],
+  sourceId = makeSourceId(),
+): { source: SourceRecord; records: SourceMessage[] } {
+  const resolvedRawInput = resolve(rawInputPath);
+  if (!existsSync(resolvedRawInput) || !statSync(resolvedRawInput).isFile()) throw new Error(`Raw source snapshot not found: ${rawInputPath}`);
+  const contentHash = hashSourceFile(resolvedRawInput);
+  return persistSourceRecords(home, source, options, records, sourceId, contentHash, (rawPath) => {
+    copyFileSync(resolvedRawInput, rawPath, constants.COPYFILE_FICLONE);
+    chmodSync(rawPath, 0o600);
+  });
+}
+
+/**
+ * Register a local owner-managed source without copying its full raw file.
+ * IKB persists only immutable normalized evidence records; rawPath remains a
+ * live locator owned by Codex/Claude/Desk rather than an IKB cache.
+ */
+export function importExternalSourceRecords(
+  home: string,
+  source: string,
+  contentHash: string,
+  options: SourceImportOptions,
+  records: SourceMessage[],
+  sourceId = makeSourceId(),
+): { source: SourceRecord; records: SourceMessage[] } {
+  return persistSourceRecords(home, source, {
+    ...options,
+    rawStorage: "external",
+  }, records, sourceId, contentHash, null);
+}
+
+function persistSourceRecords(
+  home: string,
+  source: string,
+  options: SourceImportOptions,
+  records: SourceMessage[],
+  sourceId: string,
+  contentHash: string,
+  writeRaw: ((rawPath: string) => void) | null,
+): { source: SourceRecord; records: SourceMessage[] } {
   const originalPath = resolve(source);
   if (!existsSync(originalPath) || !statSync(originalPath).isFile()) throw new Error(`Source file not found: ${source}`);
   const scope = normalizeSourceScope(options.scope);
   const format = isJsonl(originalPath) ? "jsonl" : "markdown";
-  const sourceRoot = join(resolve(home), "sources");
+  const sourceRoot = resolveSourcesRoot(home);
   if (!isSafeSourceId(sourceId)) throw new Error(`Source id must use the safe src-* form: ${sourceId}`);
   validateSourceRecords(records, sourceId);
   assertSourceRoot(home, sourceRoot);
@@ -92,38 +149,49 @@ export function importSourceRecords(
   if (dirname(sourceDir) !== sourceRoot) throw new Error(`Source directory escapes the source root: ${sourceDir}`);
   if (existsSync(sourceDir)) throw new Error(`Source id already exists: ${sourceId}`);
   const rawDir = join(sourceDir, "raw");
+  const externalRaw = options.rawStorage === "external";
   mkdirSync(sourceRoot, { recursive: true, mode: 0o700 });
   assertSourceRoot(home, sourceRoot);
   mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
-  mkdirSync(rawDir, { recursive: true, mode: 0o700 });
+  if (!externalRaw) mkdirSync(rawDir, { recursive: true, mode: 0o700 });
   chmodSync(sourceRoot, 0o700);
   chmodSync(sourceDir, 0o700);
-  chmodSync(rawDir, 0o700);
-  const rawPath = join(rawDir, basename(originalPath));
-  writeFileSync(rawPath, content, { mode: 0o600 });
-  const recordsPath = join(sourceDir, "records.jsonl");
-  const recordsContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
-  writeFileSync(recordsPath, recordsContent, { mode: 0o600 });
-  const importedAt = new Date().toISOString();
-  const record: SourceRecord = {
-    id: sourceId,
-    title: options.title ?? basename(originalPath, extname(originalPath)),
-    kind: options.kind,
-    adapter: options.adapter,
-    includeTools: options.includeTools,
-    scope,
-    sensitivity: options.sensitivity ?? (scope === "work" ? "work-internal" : "private"),
-    format,
-    originalPath,
-    rawPath,
-    recordsPath,
-    contentHash: hashSourceContent(content),
-    recordsHash: hashSourceContent(recordsContent),
-    recordCount: records.length,
-    importedAt,
-  };
-  writeFileSync(join(sourceDir, "source.json"), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-  return { source: record, records };
+  if (!externalRaw) chmodSync(rawDir, 0o700);
+  try {
+    const rawPath = externalRaw ? originalPath : join(rawDir, basename(originalPath));
+    if (writeRaw) writeRaw(rawPath);
+    const recordsPath = join(sourceDir, "records.jsonl");
+    const recordsContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    writeFileSync(recordsPath, recordsContent, { mode: 0o600 });
+    const importedAt = new Date().toISOString();
+    const record: SourceRecord = {
+      id: sourceId,
+      title: options.title ?? basename(originalPath, extname(originalPath)),
+      kind: options.kind,
+      adapter: options.adapter,
+      includeTools: options.includeTools,
+      scope,
+      sensitivity: options.sensitivity ?? (scope === "work" ? "work-internal" : "private"),
+      format,
+      originalPath,
+      rawPath,
+      ...(externalRaw ? {
+        rawStorage: "external" as const,
+        originBytes: options.originBytes ?? statSync(originalPath).size,
+        originModifiedAt: options.originModifiedAt ?? statSync(originalPath).mtime.toISOString(),
+      } : {}),
+      recordsPath,
+      contentHash,
+      recordsHash: hashSourceContent(recordsContent),
+      recordCount: records.length,
+      importedAt,
+    };
+    writeFileSync(join(sourceDir, "source.json"), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    return { source: record, records };
+  } catch (error) {
+    rmSync(sourceDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export function findSourceByOriginAndHash(home: string, source: string, contentHash: string, options: { adapter?: string; scope?: string; sensitivity?: string; includeTools?: boolean } = {}): SourceRecord | null {
@@ -142,7 +210,7 @@ export function findSourceByOriginAndHash(home: string, source: string, contentH
 
 export function inspectSourceIntegrity(home: string, source: SourceRecord, options: SourceIntegrityOptions = {}): SourceIntegrityIssue[] {
   const issues: SourceIntegrityIssue[] = [];
-  const sourceDirectory = join(resolve(home), "sources", source.id);
+  const sourceDirectory = join(resolveSourcesRoot(home), source.id);
   const realSourceDirectory = existsSync(sourceDirectory) ? realpathSync(sourceDirectory) : sourceDirectory;
   const inspectPath = (path: string, kind: "raw" | "records"): boolean => {
     const absolutePath = resolve(path);
@@ -172,8 +240,8 @@ export function inspectSourceIntegrity(home: string, source: SourceRecord, optio
     return true;
   };
 
-  if (options.verifyRaw !== false && inspectPath(source.rawPath, "raw")) {
-    const actualHash = hashSourceContent(readFileSync(source.rawPath));
+  if (options.verifyRaw !== false && (source.rawStorage === undefined || source.rawStorage === "managed") && inspectPath(source.rawPath, "raw")) {
+    const actualHash = hashSourceFile(source.rawPath);
     if (actualHash !== source.contentHash) {
       issues.push({ sourceId: source.id, code: "raw_hash_mismatch", path: source.rawPath, detail: `expected ${source.contentHash}, got ${actualHash}` });
     }
@@ -212,7 +280,7 @@ export function listSources(home: string, options: SourceListOptions = {}): Sour
 }
 
 export function inspectSourceRegistry(home: string): SourceRegistryInspection {
-  const root = join(resolve(home), "sources");
+  const root = resolveSourcesRoot(home);
   if (!existsSync(root)) return { sources: [], issues: [] };
   const rootStat = lstatSync(root);
   if (rootStat.isSymbolicLink()) return { sources: [], issues: [{ sourceId: "sources", code: "source_root_symlink", path: root, detail: "sources root must not be a symlink" }] };
@@ -273,13 +341,15 @@ function isSafeSourceId(value: string): boolean {
 }
 
 function assertSourceRoot(home: string, root: string): void {
+  if (resolve(root) !== resolveSourcesRoot(home)) throw new Error(`Sources root does not match the active layout: ${root}`);
   if (!existsSync(root)) return;
   const rootStat = lstatSync(root);
   if (rootStat.isSymbolicLink()) throw new Error(`Sources root must not be a symlink: ${root}`);
   if (!rootStat.isDirectory()) throw new Error(`Sources root must be a directory: ${root}`);
   const realHome = realpathSync(resolve(home));
   const realRoot = realpathSync(root);
-  if (dirname(realRoot) !== realHome) throw new Error(`Sources root escapes the home directory: ${root}`);
+  const withinHome = relative(realHome, realRoot);
+  if (!withinHome || withinHome.startsWith("..") || isAbsolute(withinHome)) throw new Error(`Sources root escapes the home directory: ${root}`);
 }
 
 export function findSource(home: string, id: string): SourceRecord | null {
@@ -467,6 +537,22 @@ function validateSourceRecords(records: SourceMessage[], sourceId: string): void
 
 export function hashSourceContent(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+export function hashSourceFile(path: string): string {
+  const hash = createHash("sha256");
+  const descriptor = openSync(resolve(path), "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    while (true) {
+      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest("hex");
 }
 
 export function makeSourceId(): string {

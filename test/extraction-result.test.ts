@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   renderExtractionBatch,
+  renderKnowledgeProductBody,
   validateExtractionBatch,
   verifyExtractionBatch,
 } from "../src/extraction-result.ts";
@@ -162,6 +163,255 @@ function baseResult() {
     next_triggers: ["当前代码或发布状态变化时重跑"],
   };
 }
+
+function v3Manifest() {
+  const next = structuredClone(manifest);
+  next.schema = "ikb-knowledge-extraction-benchmark.v3";
+  next.cases[0].source_units = [
+    {
+      unit_id: "u-objects",
+      source_id: "src-business",
+      unit_kind: "paragraph",
+      locator: "第 1 行",
+      content: "报价请求、报价方案与乘机人供给是不同对象。",
+      content_sha256: createHash("sha256").update("报价请求、报价方案与乘机人供给是不同对象。").digest("hex"),
+      importance: "core",
+    },
+    {
+      unit_id: "u-flow",
+      source_id: "src-business",
+      unit_kind: "paragraph",
+      locator: "第 2 行",
+      content: "统一调用链路为 API 到 renderer 到 adaptor 到供应链系统。",
+      content_sha256: createHash("sha256").update("统一调用链路为 API 到 renderer 到 adaptor 到供应链系统。").digest("hex"),
+      importance: "core",
+    },
+  ];
+  next.cases[0].reference_facts = [
+    {
+      reference_fact_id: "rf-objects",
+      statement: "报价请求、报价方案与乘机人供给是不同对象。",
+      importance: "core",
+      source_unit_refs: ["u-objects"],
+      question_refs: ["q-objects"],
+    },
+    {
+      reference_fact_id: "rf-flow",
+      statement: "统一调用链路为 API 到 renderer 到 adaptor 到供应链系统。",
+      importance: "core",
+      source_unit_refs: ["u-flow"],
+      question_refs: ["q-flow"],
+    },
+  ];
+  next.cases[0].questions = [
+    {
+      question_id: "q-objects",
+      text: "报价领域有哪些核心对象和关系？",
+      importance: "core",
+      required_product_types: ["domain_pack"],
+    },
+    {
+      question_id: "q-flow",
+      text: "目标报价主链路怎样流转？",
+      importance: "core",
+      required_product_types: ["flow_card"],
+    },
+  ];
+  next.cases[0].existing_knowledge = [];
+  return next;
+}
+
+function v3Result() {
+  const next = structuredClone(baseResult());
+  next.schema = "ikb-knowledge-compilation-result.v3";
+  next.evidence_units[0].source_unit_refs = ["u-objects"];
+  next.evidence_units[1].source_unit_refs = ["u-flow"];
+  next.facts[0].reference_fact_refs = ["rf-objects"];
+  next.facts[1].reference_fact_refs = ["rf-flow"];
+  next.claims[0].support_status = "supported";
+  next.source_unit_dispositions = [
+    { unit_id: "u-objects", disposition: "extracted", evidence_ids: ["ev-objects"], fact_refs: ["f-objects"], reason: "保留领域对象" },
+    { unit_id: "u-flow", disposition: "extracted", evidence_ids: ["ev-flow"], fact_refs: ["f-flow"], reason: "保留目标链路" },
+  ];
+  next.reference_fact_dispositions = [
+    { reference_fact_id: "rf-objects", disposition: "preserved", fact_refs: ["f-objects"], reason: "原义保留" },
+    { reference_fact_id: "rf-flow", disposition: "preserved", fact_refs: ["f-flow"], reason: "原义保留" },
+  ];
+  next.products[0].canonical_key = "work:pricing:domain_pack:target-model";
+  next.products[0].operation = "new";
+  next.products[0].question_refs = ["q-objects"];
+  next.products[0].unique_value = "保留报价领域对象及关系";
+  next.products[1].canonical_key = "work:pricing:flow_card:target-chain";
+  next.products[1].operation = "new";
+  next.products[1].question_refs = ["q-flow"];
+  next.products[1].unique_value = "提供可独立检索和验证的目标调用链";
+  next.question_results = [
+    { question_id: "q-objects", disposition: "answered", fact_refs: ["f-objects"], product_refs: ["p-domain"], reason: "领域包直接回答" },
+    { question_id: "q-flow", disposition: "answered", fact_refs: ["f-flow"], product_refs: ["p-flow"], reason: "流程卡直接回答" },
+  ];
+  return next;
+}
+
+test("v3 verifier measures a lossless compilation against frozen source facts", () => {
+  const report = verifyExtractionBatch(v3Manifest(), [v3Result()]);
+  assert.equal(report.valid, true);
+  assert.equal(report.verdicts[0].publishable, true);
+  assert.equal(report.verdicts[0].checks.sourceCompleteness, true);
+  assert.equal(report.verdicts[0].checks.informationLoss, true);
+  assert.equal(report.verdicts[0].checks.minimalSufficiency, true);
+  assert.deepEqual(report.verdicts[0].metrics, {
+    sourceUnitDispositionRate: 1,
+    sourceUnitExtractionRate: 1,
+    materialSourceUnitExtractionRate: 1,
+    blockedSourceUnitCount: 0,
+    coreFactRecall: 1,
+    supportingFactDispositionRate: 1,
+    viewFactRetention: 1,
+    viewCoreFactRetention: 1,
+    claimSupportPrecision: 1,
+    questionCoverage: 1,
+    conflictExposure: 1,
+    semanticLoss: 0,
+    sourceCharacterCount: businessSourceContent.length,
+    knowledgeCharacterCount: JSON.stringify(v3Result().products).length,
+    compressionRatio: JSON.stringify(v3Result().products).length / businessSourceContent.length,
+  });
+});
+
+test("v3 product view deterministically materializes the exact task-facing facts and structure", () => {
+  const result = v3Result();
+  const first = renderKnowledgeProductBody(result, "business-01", "p-domain");
+  const second = renderKnowledgeProductBody(structuredClone(result), "business-01", "p-domain");
+  assert.equal(second, first);
+  assert.match(first, /work:pricing:domain_pack:target-model/);
+  assert.match(first, /保留报价领域对象及关系/);
+  assert.match(first, /报价方案按乘机人与供给关系组织/);
+  assert.match(first, /乘机人和供给关系不能在组合时丢失/);
+  assert.match(first, /目标模型仍需当前代码核验/);
+  assert.doesNotMatch(first, /目标调用链路是 API→renderer/);
+});
+
+test("v3 verifier rejects a source unit that has no explicit disposition", () => {
+  const result = v3Result();
+  result.source_unit_dispositions = result.source_unit_dispositions.slice(0, 1);
+  const report = verifyExtractionBatch(v3Manifest(), [result]);
+  assert.equal(report.valid, false);
+  assert.equal(report.issues.some((item) => item.code === "source_unit_disposition_missing"), true);
+  assert.equal(report.verdicts[0].checks.sourceCompleteness, false);
+});
+
+test("v3 admits an explicitly blocked supporting visual but rejects a blocked core visual", () => {
+  const supportingManifest = v3Manifest();
+  supportingManifest.cases[0].source_units.push({
+    unit_id: "u-screenshot",
+    source_id: "src-business",
+    unit_kind: "image",
+    locator: "附图 1",
+    content: "报价请求、报价方案与乘机人供给是不同对象。",
+    content_sha256: createHash("sha256").update("报价请求、报价方案与乘机人供给是不同对象。").digest("hex"),
+    importance: "supporting",
+  });
+  const supportingResult = v3Result();
+  supportingResult.source_unit_dispositions.push({
+    unit_id: "u-screenshot",
+    disposition: "blocked",
+    evidence_ids: [],
+    fact_refs: [],
+    reason: "视觉原件尚未进入当前只读快照，显式保留为P1缺口。",
+  });
+  const supportingReport = verifyExtractionBatch(supportingManifest, [supportingResult]);
+  assert.equal(supportingReport.valid, true);
+  assert.equal(supportingReport.verdicts[0].publishable, true);
+  assert.equal(supportingReport.verdicts[0].metrics.sourceUnitDispositionRate, 1);
+  assert.equal(supportingReport.verdicts[0].metrics.sourceUnitExtractionRate, 2 / 3);
+  assert.equal(supportingReport.verdicts[0].metrics.blockedSourceUnitCount, 1);
+
+  supportingManifest.cases[0].source_units.at(-1).importance = "core";
+  const coreReport = verifyExtractionBatch(supportingManifest, [supportingResult]);
+  assert.equal(coreReport.valid, false);
+  assert.equal(coreReport.issues.some((item) => item.code === "source_unit_material_unresolved"), true);
+});
+
+test("v3 hashes frozen source-unit bytes without trimming JSON or code indentation", () => {
+  const currentManifest = v3Manifest();
+  const indented = "  \"content\": \"必须保留原始缩进\"";
+  currentManifest.cases[0].source_snapshots = [sourceSnapshot("src-business", `${businessSourceContent}\n${indented}`)];
+  currentManifest.cases[0].source_units.push({
+    unit_id: "u-indented-json",
+    source_id: "src-business",
+    unit_kind: "comment",
+    locator: "JSON 第 3 行",
+    content: indented,
+    content_sha256: createHash("sha256").update(indented).digest("hex"),
+    importance: "supporting",
+  });
+  const result = v3Result();
+  result.source_unit_dispositions.push({
+    unit_id: "u-indented-json",
+    disposition: "context_only",
+    evidence_ids: [],
+    fact_refs: [],
+    reason: "仅用于解释来源格式。",
+  });
+  const report = verifyExtractionBatch(currentManifest, [result]);
+  assert.equal(report.valid, true);
+});
+
+test("v3 verifier reports and blocks a lost core fact", () => {
+  const result = v3Result();
+  result.reference_fact_dispositions[1] = {
+    reference_fact_id: "rf-flow",
+    disposition: "lost",
+    fact_refs: [],
+    reason: "编译时遗漏目标主链路",
+  };
+  result.facts[1].reference_fact_refs = [];
+  const report = verifyExtractionBatch(v3Manifest(), [result]);
+  assert.equal(report.valid, false);
+  assert.equal(report.issues.some((item) => item.code === "information_loss_core_fact_lost"), true);
+  assert.equal(report.verdicts[0].metrics.coreFactRecall, 0.5);
+  assert.equal(report.verdicts[0].metrics.semanticLoss > 0, true);
+});
+
+test("v3 verifier rejects a material claim that is not fully supported", () => {
+  const result = v3Result();
+  result.claims[0].support_status = "partially_supported";
+  const report = verifyExtractionBatch(v3Manifest(), [result]);
+  assert.equal(report.valid, false);
+  assert.equal(report.issues.some((item) => item.code === "claim_support_status_not_supported"), true);
+  assert.equal(report.verdicts[0].metrics.claimSupportPrecision, 0);
+});
+
+test("v3 verifier rejects an unanswered core consumer question", () => {
+  const result = v3Result();
+  result.question_results[1] = {
+    question_id: "q-flow",
+    disposition: "gap",
+    fact_refs: [],
+    product_refs: [],
+    reason: "流程信息没有进入消费者视图",
+  };
+  const report = verifyExtractionBatch(v3Manifest(), [result]);
+  assert.equal(report.valid, false);
+  assert.equal(report.issues.some((item) => item.code === "question_core_unanswered"), true);
+  assert.equal(report.verdicts[0].metrics.questionCoverage, 0.5);
+});
+
+test("v3 validator prevents two active products from sharing one canonical key", () => {
+  const result = v3Result();
+  result.products[1].canonical_key = result.products[0].canonical_key;
+  const report = validateExtractionBatch(v3Manifest(), [result]);
+  assert.equal(report.valid, false);
+  assert.equal(report.issues.some((item) => item.code === "canonical_key_duplicate"), true);
+});
+
+test("v2 compilations remain auditable but cannot publish new knowledge", () => {
+  const report = verifyExtractionBatch(manifest, [baseResult()]);
+  assert.equal(report.valid, true);
+  assert.equal(report.verdicts[0].legacy, true);
+  assert.equal(report.verdicts[0].publishable, false);
+  assert.equal(report.verdicts[0].checks.informationLoss, false);
+});
 
 test("v2 validator rejects a polished headline without fact inventory and type structure", () => {
   const result = baseResult();
@@ -370,6 +620,17 @@ test("renderer keeps the fact inventory in a human-readable Chinese file", () =>
   assert.match(markdown, /## 事实清单/);
   assert.match(markdown, /报价方案按乘机人与供给关系组织/);
   assert.match(markdown, /API→renderer→adaptor→供应链系统/);
+});
+
+test("v3 renderer writes a separate human-readable information loss report", () => {
+  const output = mkdtempSync(join(tmpdir(), "ikb-extraction-loss-"));
+  const rendered = renderExtractionBatch(v3Manifest(), [v3Result()], output);
+  assert.match(rendered[0].informationLossPath, /报价领域事实-business-01-信息损耗报告\.md$/);
+  const markdown = readFileSync(rendered[0].informationLossPath, "utf8");
+  assert.match(markdown, /## Source → Fact Package/);
+  assert.match(markdown, /P0 关键事实召回率.*100%/);
+  assert.match(markdown, /主张支持精度.*100%/);
+  assert.match(markdown, /未解释语义损耗.*0%/);
 });
 
 test("renderer sanitizes frozen case ids before constructing a file path", () => {

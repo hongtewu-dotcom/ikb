@@ -37,8 +37,9 @@ export function buildPublication(home: string, options: PublicationBuildOptions)
     schema_version: "ikb-personal-publication.v1",
     entries,
   };
+  const generatedPublicIds = entries.map((entry) => entry.public_id);
   const bundleBytes = stableJson(bundle);
-  assertPublicBytes("bundle.json", bundleBytes);
+  assertPublicBytes("bundle.json", bundleBytes, generatedPublicIds);
   const bundleHash = hash(bundleBytes);
   const migrationHash = dailyCopilotMigration ? hash(stableJson(dailyCopilotMigration)) : undefined;
   const adapter = options.channel === "daily-copilot"
@@ -59,7 +60,7 @@ export function buildPublication(home: string, options: PublicationBuildOptions)
     const content = options.channel === "daily-copilot" && file.path === "experience-data.js"
       ? stripGeneratedMiniProgramHtml(file.content)
       : file.content;
-    assertPublicBytes(file.path, content);
+    assertPublicBytes(file.path, content, generatedPublicIds);
   }
   const outputHash = hashFileSet(outputFiles);
   const releaseId = `release-${hash(`${options.channel}\n${bundleHash}\n${outputHash}`).slice(0, 16)}`;
@@ -273,8 +274,8 @@ function publicId(knowledgeId: string): string {
   return `pub-${hash(`ikb-publication:${knowledgeId}`).slice(0, 16)}`;
 }
 
-function assertPublicBytes(label: string, content: string): void {
-  const issues = inspectPublicText(content);
+function assertPublicBytes(label: string, content: string, generatedPublicIds: string[]): void {
+  const issues = inspectPublicText(content, generatedPublicIds);
   if (issues.length > 0) {
     throw new Error(`Public output ${label} failed sensitive scan: ${issues.map((issue) => `${issue.code} (${issue.detail})`).join("; ")}`);
   }

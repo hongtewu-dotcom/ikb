@@ -13,9 +13,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Approval, Artifact, EventRecord, Run, StoreOptions, Task } from "./types.ts";
 import { normalizeHarnessEvent, type HarnessEventType } from "../projects/eval-plane/src/harness-events.ts";
+import { STORAGE_ROOT_AGGREGATE_ID, STORAGE_ROOT_RELOCATED_EVENT, StoragePathResolver, normalizeRelocation, storageRootRelocations, type StorageRootRelocation } from "./storage-relocation.ts";
+import { resolveLedgerPath, resolveLedgerRoot, resolveRunsRoot } from "./layout.ts";
 
 type Row = Record<string, any>;
 type EventPayload = Record<string, unknown>;
@@ -44,12 +46,14 @@ export class LedgerStore {
   private readonly actor: string;
   private events: EventRecord[] = [];
   private pendingEvents: EventRecord[] | null = null;
+  private eventsSignature = "";
+  private projectionCache: Projection | null = null;
 
   constructor(options: StoreOptions) {
     this.home = resolve(options.home);
-    this.ledgerDir = join(this.home, "ledger");
-    this.eventsPath = join(this.ledgerDir, "events.jsonl");
-    this.runsDir = join(this.home, "runs");
+    this.ledgerDir = resolveLedgerRoot(this.home);
+    this.eventsPath = resolveLedgerPath(this.home);
+    this.runsDir = resolveRunsRoot(this.home);
     this.lockPath = join(this.ledgerDir, "events.lock");
     this.actor = options.actor ?? process.env.IKB_ACTOR ?? "human";
     mkdirSync(this.ledgerDir, { recursive: true, mode: 0o700 });
@@ -58,15 +62,21 @@ export class LedgerStore {
     chmodSync(this.runsDir, 0o700);
     if (!existsSync(this.eventsPath)) writeFileSync(this.eventsPath, "", { mode: 0o600 });
     chmodSync(this.eventsPath, 0o600);
-    this.reload();
+    this.reload(true);
   }
 
   close(): void {
     this.events = [];
+    this.eventsSignature = "";
+    this.projectionCache = null;
   }
 
-  reload(): void {
+  reload(force = true): void {
+    const signature = fileSignature(this.eventsPath);
+    if (!force && signature === this.eventsSignature) return;
     this.events = readEventsFile(this.eventsPath);
+    this.eventsSignature = signature;
+    this.projectionCache = null;
   }
 
   createTask(input: {
@@ -222,7 +232,11 @@ export class LedgerStore {
 
   retryRun(runId: string, agentId?: string): Run {
     const run = this.requireRun(runId);
-    if (!["failed", "canceled"].includes(run.status)) throw new Error(`Run ${runId} must be failed or canceled before retry`);
+    const latestEvaluation = this.events.filter((event) => event.aggregateType === "run" && event.aggregateId === runId && event.eventType === "run.evaluation_completed").at(-1);
+    const qualityBlocked = run.status === "succeeded" && ["partial", "blocked"].includes(String(latestEvaluation?.payload.result ?? ""));
+    if (!["failed", "canceled"].includes(run.status) && !qualityBlocked) {
+      throw new Error(`Run ${runId} must be failed, canceled, or terminal-succeeded with a blocked/partial Evaluation before retry`);
+    }
     return this.createRun(run.taskId, agentId ?? run.agentId, run.skillIds ? run.skillIds.split(",").filter(Boolean) : [], runId);
   }
 
@@ -283,10 +297,60 @@ export class LedgerStore {
     return this.requireArtifact(artifact.id);
   }
 
-  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.retired" | "knowledge.archived" | "knowledge.related" | "knowledge.migrated" | "knowledge.referenced" | "knowledge.feedback_recorded", payload: EventPayload): EventRecord {
+  recordKnowledgeEvent(knowledgeId: string, eventType: "knowledge.created" | "knowledge.verified" | "knowledge.revised" | "knowledge.retired" | "knowledge.archived" | "knowledge.related" | "knowledge.migrated" | "knowledge.referenced" | "knowledge.used" | "knowledge.feedback_recorded", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("knowledge", knowledgeId, eventType, payload, null);
+    });
+    return event!;
+  }
+
+  recordKnowledgeQueryEvent(payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("knowledge_query", makeId("query"), "knowledge.query_executed", payload, null);
+    });
+    return event!;
+  }
+
+  recordKnowledgeUsageEvent(knowledgeId: string, payload: EventPayload): EventRecord {
+    const normalized = normalizeJsonValue(payload) as EventPayload;
+    const payloadHash = sha256(stableStringify(normalized));
+    let event: EventRecord;
+    this.transact(() => {
+      const events = [...this.events, ...(this.pendingEvents ?? [])];
+      const existing = events.find((candidate) => candidate.aggregateType === "knowledge"
+        && candidate.aggregateId === knowledgeId
+        && candidate.eventType === "knowledge.used"
+        && candidate.payloadHash === payloadHash);
+      event = existing ?? this.appendEventInternal("knowledge", knowledgeId, "knowledge.used", normalized, null);
+    });
+    return event!;
+  }
+
+  recordKnowledgeFeedbackEvent(knowledgeId: string, payload: EventPayload): EventRecord {
+    const normalized = normalizeJsonValue(payload) as EventPayload;
+    const payloadHash = sha256(stableStringify(normalized));
+    const runId = String(normalized.runId ?? "");
+    let event: EventRecord;
+    this.transact(() => {
+      const events = [...this.events, ...(this.pendingEvents ?? [])];
+      const existing = events.find((candidate) => candidate.aggregateType === "knowledge"
+        && candidate.aggregateId === knowledgeId
+        && candidate.eventType === "knowledge.feedback_recorded"
+        && candidate.payload.runId === runId);
+      if (existing && existing.payloadHash !== payloadHash) {
+        throw new Error(`Knowledge ${knowledgeId} already has final feedback for Run ${runId}: ${String(existing.payload.outcome ?? "unknown")}`);
+      }
+      event = existing ?? this.appendEventInternal("knowledge", knowledgeId, "knowledge.feedback_recorded", normalized, null);
+    });
+    return event!;
+  }
+
+  recordReceiptEvent(receiptId: string, payload: EventPayload): EventRecord {
+    let event: EventRecord;
+    this.transact(() => {
+      event = this.appendEventInternal("receipt", receiptId, "receipt.written", payload, null);
     });
     return event!;
   }
@@ -325,12 +389,20 @@ export class LedgerStore {
     return recorded;
   }
 
-  recordSourceEvent(sourceId: string, eventType: "source.ingested" | "source.context_built" | "source.history_scan" | "source.citadel_search" | "source.citadel_read_started" | "source.candidate_discovery" | "source.incremental_scan", payload: EventPayload): EventRecord {
+  recordSourceEvent(sourceId: string, eventType: "source.ingested" | "source.context_built" | "source.history_scan" | "source.file_scan" | "source.citadel_search" | "source.citadel_read_started" | "source.candidate_discovery" | "source.incremental_scan" | "source.aliases_updated", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("source", sourceId, eventType, payload, null);
     });
     return event!;
+  }
+
+  recordSourceEvents(items: Array<{ id: string; eventType: "source.ingested" | "source.context_built" | "source.history_scan" | "source.file_scan" | "source.citadel_search" | "source.citadel_read_started" | "source.candidate_discovery" | "source.incremental_scan" | "source.aliases_updated"; payload: EventPayload }>): EventRecord[] {
+    const recorded: EventRecord[] = [];
+    this.transact(() => {
+      for (const item of items) recorded.push(this.appendEventInternal("source", item.id, item.eventType, item.payload, null));
+    });
+    return recorded;
   }
 
   recordCandidateEvent(candidateId: string, eventType: "candidate.discovered" | "candidate.queued" | "candidate.resolve_started" | "candidate.ingested" | "candidate.rejected" | "candidate.blocked" | "candidate.updated", payload: EventPayload): EventRecord {
@@ -341,12 +413,21 @@ export class LedgerStore {
     return event!;
   }
 
-  recordExperienceEvent(experienceId: string, eventType: "experience.queued" | "experience.updated" | "experience.candidate_created" | "experience.candidate_updated", payload: EventPayload): EventRecord {
+  recordExperienceEvent(experienceId: string, eventType: "experience.queued" | "experience.updated" | "experience.ignored" | "experience.context_built" | "experience.analyzed" | "experience.analysis_invalidated" | "experience.validation_recorded" | "experience.candidate_created" | "experience.candidate_updated" | "experience.candidate_accepted" | "experience.candidate_rejected" | "experience.candidate_applied", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("experience", experienceId, eventType, payload, null);
     });
     return event!;
+  }
+
+  recordExperienceEvents(items: Array<{ id: string; eventType: "experience.queued" | "experience.updated" | "experience.ignored" | "experience.analysis_invalidated"; payload: EventPayload }>): EventRecord[] {
+    const recorded: EventRecord[] = [];
+    if (items.length === 0) return recorded;
+    this.transact(() => {
+      for (const item of items) recorded.push(this.appendEventInternal("experience", item.id, item.eventType, item.payload, null));
+    });
+    return recorded;
   }
 
   recordReasoningEvent(reasoningId: string, eventType: "reasoning.generated", payload: EventPayload): EventRecord {
@@ -357,7 +438,7 @@ export class LedgerStore {
     return event!;
   }
 
-  recordPersonEvent(personId: string, eventType: "person.added" | "person.updated" | "person.removed" | "person.view_built", payload: EventPayload): EventRecord {
+  recordPersonEvent(personId: string, eventType: "person.added" | "person.updated" | "person.removed" | "person.view_built" | "person.analysis_checkpointed", payload: EventPayload): EventRecord {
     let event: EventRecord;
     this.transact(() => {
       event = this.appendEventInternal("person", personId, eventType, payload, null);
@@ -368,13 +449,59 @@ export class LedgerStore {
   recordSourceIngestEvents(items: Array<{ id: string; payload: EventPayload }>): EventRecord[] {
     const recorded: EventRecord[] = [];
     this.transact(() => {
+      const existingSourceIds = new Set([...this.events, ...(this.pendingEvents ?? [])]
+        .filter((event) => event.aggregateType === "source" && event.eventType === "source.ingested")
+        .map((event) => event.aggregateId));
       for (const item of items) {
-        const events = [...this.events, ...(this.pendingEvents ?? [])];
-        const exists = events.some((event) => event.aggregateType === "source" && event.aggregateId === item.id && event.eventType === "source.ingested");
-        if (!exists) recorded.push(this.appendEventInternal("source", item.id, "source.ingested", item.payload, null));
+        if (existingSourceIds.has(item.id)) continue;
+        recorded.push(this.appendEventInternal("source", item.id, "source.ingested", item.payload, null));
+        existingSourceIds.add(item.id);
       }
     });
     return recorded;
+  }
+
+  /** Records a project-root or in-home layout move without rewriting history. */
+  recordStorageRootRelocation(input: StorageRootRelocation): EventRecord {
+    return this.recordStorageRootRelocations([input])[0];
+  }
+
+  recordStorageRootRelocations(inputs: StorageRootRelocation[]): EventRecord[] {
+    if (inputs.length === 0) return [];
+    const relocations = inputs.map((input) => normalizeRelocation(input));
+    for (const relocation of relocations) this.assertStorageRelocationAllowed(relocation);
+    const recorded: EventRecord[] = [];
+    this.transact(() => {
+      const events = [...this.events, ...(this.pendingEvents ?? [])];
+      const existingRelocations = storageRootRelocations(events);
+      new StoragePathResolver([...existingRelocations, ...relocations]);
+      for (const relocation of relocations) {
+        const existing = existingRelocations.find((candidate) => candidate.fromRoot === relocation.fromRoot);
+        if (existing && existing.toRoot !== relocation.toRoot) {
+          throw new Error(`Storage relocation already maps ${relocation.fromRoot} to ${existing.toRoot}`);
+        }
+        const priorEvent = events.find((candidate) => candidate.aggregateType === "system"
+          && candidate.eventType === STORAGE_ROOT_RELOCATED_EVENT
+          && candidate.payload.fromRoot === relocation.fromRoot
+          && candidate.payload.toRoot === relocation.toRoot);
+        recorded.push(priorEvent ?? this.appendEventInternal("system", STORAGE_ROOT_AGGREGATE_ID, STORAGE_ROOT_RELOCATED_EVENT, relocation, null));
+      }
+    });
+    return recorded;
+  }
+
+  resolveStoragePath(path: string): string {
+    return new StoragePathResolver(storageRootRelocations(this.listEvents())).resolve(path);
+  }
+
+  private assertStorageRelocationAllowed(relocation: StorageRootRelocation): void {
+    const currentProjectRoot = resolve(dirname(this.home));
+    const layoutMove = isWithin(relocation.fromRoot, this.home)
+      && relocation.fromRoot !== this.home
+      && isWithin(relocation.toRoot, this.home);
+    if (relocation.toRoot !== currentProjectRoot && !layoutMove) {
+      throw new Error(`Storage relocation must target the current project root or stay inside IKB home: ${this.home}`);
+    }
   }
 
   verify(): { events: number; brokenChains: string[]; projections: Record<string, number> } {
@@ -403,7 +530,7 @@ export class LedgerStore {
   }
 
   stats(): Record<string, unknown> {
-    const projection = this.project(this.listEvents());
+    const projection = this.currentProjection();
     return {
       tasks: groupCount([...projection.tasks.values()], "status"),
       runs: groupCount([...projection.runs.values()], "status"),
@@ -417,7 +544,7 @@ export class LedgerStore {
   }
 
   getTask(id: string): Task | null {
-    return this.project(this.listEvents()).tasks.get(id) ?? null;
+    return this.currentProjection().tasks.get(id) ?? null;
   }
 
   requireTask(id: string): Task {
@@ -427,14 +554,14 @@ export class LedgerStore {
   }
 
   listTasks(filters: { status?: string; type?: string } = {}): Task[] {
-    return [...this.project(this.listEvents()).tasks.values()]
+    return [...this.currentProjection().tasks.values()]
       .filter((task) => !filters.status || task.status === filters.status)
       .filter((task) => !filters.type || task.type === filters.type)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   getRun(id: string): Run | null {
-    return this.project(this.listEvents()).runs.get(id) ?? null;
+    return this.currentProjection().runs.get(id) ?? null;
   }
 
   requireRun(id: string): Run {
@@ -444,14 +571,14 @@ export class LedgerStore {
   }
 
   listRuns(filters: { taskId?: string; status?: string } = {}): Run[] {
-    return [...this.project(this.listEvents()).runs.values()]
+    return [...this.currentProjection().runs.values()]
       .filter((run) => !filters.taskId || run.taskId === filters.taskId)
       .filter((run) => !filters.status || run.status === filters.status)
       .sort((left, right) => String(right.startedAt ?? right.id).localeCompare(String(left.startedAt ?? left.id)));
   }
 
   getApproval(id: string): Approval | null {
-    return this.project(this.listEvents()).approvals.get(id) ?? null;
+    return this.currentProjection().approvals.get(id) ?? null;
   }
 
   requireApproval(id: string): Approval {
@@ -461,14 +588,14 @@ export class LedgerStore {
   }
 
   listApprovals(filters: { status?: string; taskId?: string } = {}): Approval[] {
-    return [...this.project(this.listEvents()).approvals.values()]
+    return [...this.currentProjection().approvals.values()]
       .filter((approval) => !filters.status || approval.status === filters.status)
       .filter((approval) => !filters.taskId || approval.taskId === filters.taskId)
       .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt));
   }
 
   getArtifact(id: string): Artifact | null {
-    return this.project(this.listEvents()).artifacts.get(id) ?? null;
+    return this.currentProjection().artifacts.get(id) ?? null;
   }
 
   requireArtifact(id: string): Artifact {
@@ -478,22 +605,22 @@ export class LedgerStore {
   }
 
   listArtifacts(filters: { runId?: string; taskId?: string } = {}): Artifact[] {
-    return [...this.project(this.listEvents()).artifacts.values()]
+    return [...this.currentProjection().artifacts.values()]
       .filter((artifact) => !filters.runId || artifact.runId === filters.runId)
       .filter((artifact) => !filters.taskId || artifact.taskId === filters.taskId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   listEvents(): EventRecord[] {
-    this.reload();
+    this.reload(false);
     return [...this.events];
   }
 
   eventsFor(id: string): EventRecord[] {
     const events = this.listEvents();
-    const task = this.project(events).tasks.get(id);
+    const projection = this.currentProjection();
+    const task = projection.tasks.get(id);
     if (!task) return events.filter((event) => event.aggregateId === id);
-    const projection = this.project(events);
     const related = new Set<string>([
       task.id,
       ...[...projection.runs.values()].filter((run) => run.taskId === task.id).map((run) => run.id),
@@ -505,8 +632,15 @@ export class LedgerStore {
 
   private project(events: EventRecord[]): Projection {
     const projection: Projection = { tasks: new Map(), runs: new Map(), approvals: new Map(), artifacts: new Map() };
-    for (const event of events) applyEvent(projection, event);
+    const resolver = new StoragePathResolver(storageRootRelocations(events));
+    for (const event of events) applyEvent(projection, event, resolver);
     return projection;
+  }
+
+  private currentProjection(): Projection {
+    this.reload(false);
+    if (!this.projectionCache) this.projectionCache = this.project(this.events);
+    return this.projectionCache;
   }
 
   private writeRunSnapshot(runId: string, terminalPayload?: EventPayload): void {
@@ -548,12 +682,14 @@ export class LedgerStore {
   private transact<T>(fn: () => T): T {
     const release = acquireLock(this.lockPath);
     try {
-      this.reload();
+      this.reload(true);
       this.pendingEvents = [];
       const result = fn();
       const pending = this.pendingEvents;
       if (pending.length > 0) appendEvents(this.eventsPath, pending);
       this.events.push(...pending);
+      this.eventsSignature = fileSignature(this.eventsPath);
+      this.projectionCache = null;
       this.pendingEvents = null;
       return result;
     } catch (error) {
@@ -565,7 +701,12 @@ export class LedgerStore {
   }
 }
 
-function applyEvent(projection: Projection, event: EventRecord): void {
+function isWithin(path: string, root: string): boolean {
+  const value = relative(resolve(root), resolve(path));
+  return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+}
+
+function applyEvent(projection: Projection, event: EventRecord, resolver: StoragePathResolver): void {
   const payload = event.payload as Row;
   const task = projection.tasks.get(event.aggregateId);
   if (event.eventType === "task.created") {
@@ -588,7 +729,7 @@ function applyEvent(projection: Projection, event: EventRecord): void {
     return;
   }
   if (event.eventType === "run.queued") {
-    projection.runs.set(event.aggregateId, { ...payload } as Run);
+    projection.runs.set(event.aggregateId, { ...payload, runDir: resolver.resolve(String(payload.runDir)) } as Run);
     return;
   }
   const run = projection.runs.get(event.aggregateId);
@@ -615,7 +756,7 @@ function applyEvent(projection: Projection, event: EventRecord): void {
     return;
   }
   if (event.eventType === "artifact.created") {
-    projection.artifacts.set(event.aggregateId, { ...payload } as Artifact);
+    projection.artifacts.set(event.aggregateId, { ...payload, path: resolver.resolve(String(payload.path)) } as Artifact);
   }
 }
 
@@ -638,6 +779,11 @@ function readEventsFile(path: string): EventRecord[] {
       throw new Error(`Invalid event at ${path}:${index + 1}: ${(error as Error).message}`);
     }
   }).filter(Boolean) as EventRecord[];
+}
+
+function fileSignature(path: string): string {
+  const stat = statSync(path);
+  return `${stat.size}:${stat.mtimeMs}`;
 }
 
 function appendEvents(path: string, events: EventRecord[]): void {

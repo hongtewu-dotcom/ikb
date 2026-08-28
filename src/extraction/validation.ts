@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
   ATTRIBUTION_ROLES,
+  CLAIM_SUPPORT_STATUSES,
   CLAIM_KINDS,
   EXTRACTION_FIDELITY_VERSION,
   EXTRACTION_MANIFEST_VERSION,
@@ -9,18 +10,34 @@ import {
   EXTRACTION_VALIDATION_VERSION,
   FACT_DERIVATIONS,
   FACT_IMPORTANCE,
+  LEGACY_EXTRACTION_MANIFEST_VERSION,
+  LEGACY_EXTRACTION_RESULT_VERSION,
   MODE_PRODUCTS,
+  PRODUCT_OPERATIONS,
   PRODUCT_TYPES,
+  QUESTION_DISPOSITIONS,
+  REFERENCE_FACT_DISPOSITIONS,
+  SOURCE_UNIT_DISPOSITIONS,
+  SOURCE_UNIT_KINDS,
+  SUPPORTED_EXTRACTION_MANIFEST_VERSIONS,
   TEMPORAL_STATES,
   type ExtractionFidelityReport,
   type ExtractionFidelityVerdict,
+  type ExtractionInformationLossMetrics,
   type ExtractionValidationIssue,
   type ExtractionValidationReport,
   type JsonObject,
 } from "./contracts.ts";
+import {
+  calculateInformationLossMetrics,
+  emptyInformationLossMetrics,
+  validateInformationLossResult,
+  verifyFrozenSourceUnits,
+} from "./information-loss.ts";
 
 interface BatchInspection {
   benchmarkId: string;
+  manifestSchema: string;
   manifestCases: JsonObject[];
   resultsById: Map<string, JsonObject>;
   issues: ExtractionValidationIssue[];
@@ -47,19 +64,26 @@ export function verifyExtractionBatch(manifestValue: unknown, resultValues: unkn
     const result = inspection.resultsById.get(caseId);
     if (!result) continue;
     verifyResultFidelity(result, manifestCase, issues);
+    const legacy = inspection.manifestSchema === LEGACY_EXTRACTION_MANIFEST_VERSION;
+    const metrics = legacy ? emptyInformationLossMetrics() : calculateInformationLossMetrics(manifestCase, result);
     const allCaseIssues = issues.filter((item) => item.caseId === caseId);
     const disposition = stringValue(result.disposition);
     verdicts.push({
       caseId,
       disposition: disposition === "admit" || disposition === "skip" ? disposition : "invalid",
-      publishable: disposition === "admit" && allCaseIssues.length === 0,
+      legacy,
+      publishable: !legacy && disposition === "admit" && allCaseIssues.length === 0,
       checks: {
         evidenceIntegrity: !hasIssuePrefix(allCaseIssues, ["evidence_", "fact_evidence_"]),
         coreCoverage: !hasIssuePrefix(allCaseIssues, ["coverage_", "core_"]),
         claimSupport: !hasIssuePrefix(allCaseIssues, ["claim_", "product_fact_"]),
-        typeShape: !hasIssuePrefix(allCaseIssues, ["product_", "architecture_", "domain_", "flow_", "decision_", "playbook_", "gap_"]),
+        typeShape: !hasIssuePrefix(allCaseIssues, ["product_", "architecture_", "domain_", "flow_", "decision_", "principle_", "playbook_", "gap_"]),
         personSelectivity: !hasIssuePrefix(allCaseIssues, ["person_"]),
+        sourceCompleteness: !legacy && !hasIssuePrefix(allCaseIssues, ["source_unit_"]),
+        informationLoss: !legacy && !hasIssuePrefix(allCaseIssues, ["information_loss_", "reference_fact_", "question_", "claim_support_"]),
+        minimalSufficiency: !legacy && !hasIssuePrefix(allCaseIssues, ["canonical_", "product_operation_", "product_unique_value_", "product_question_ref_"]),
       },
+      metrics,
     });
   }
   return {
@@ -69,15 +93,28 @@ export function verifyExtractionBatch(manifestValue: unknown, resultValues: unkn
     expectedCaseCount: inspection.manifestCases.length,
     caseCount: inspection.resultsById.size,
     publishableCount: verdicts.filter((item) => item.publishable).length,
-    retainedOnlyCount: verdicts.filter((item) => item.disposition === "skip" && Object.values(item.checks).every(Boolean)).length,
+    retainedOnlyCount: verdicts.filter((item) => item.disposition === "skip" && retainedChecksPass(item)).length,
     verdicts,
     issues,
   };
 }
 
+function retainedChecksPass(verdict: ExtractionFidelityVerdict): boolean {
+  const baseChecks = [
+    verdict.checks.evidenceIntegrity,
+    verdict.checks.coreCoverage,
+    verdict.checks.claimSupport,
+    verdict.checks.typeShape,
+    verdict.checks.personSelectivity,
+  ];
+  if (verdict.legacy) return baseChecks.every(Boolean);
+  return [...baseChecks, verdict.checks.sourceCompleteness, verdict.checks.informationLoss, verdict.checks.minimalSufficiency].every(Boolean);
+}
+
 function inspectBatch(manifestValue: unknown, resultValues: unknown[]): BatchInspection {
   const manifest = objectValue(manifestValue);
   const benchmarkId = stringValue(manifest?.benchmark_id);
+  const manifestSchema = stringValue(manifest?.schema);
   const manifestCases = arrayValue(manifest?.cases).flatMap((value) => {
     const row = objectValue(value);
     const caseId = stringValue(row?.case_id);
@@ -86,8 +123,8 @@ function inspectBatch(manifestValue: unknown, resultValues: unknown[]): BatchIns
   const issues: ExtractionValidationIssue[] = [];
   if (!manifest || !benchmarkId) {
     issues.push(issue("manifest_invalid", null, "manifest", "Manifest must contain benchmark_id and cases."));
-  } else if (stringValue(manifest.schema) !== EXTRACTION_MANIFEST_VERSION) {
-    issues.push(issue("manifest_schema_mismatch", null, "manifest.schema", `Manifest schema must be ${EXTRACTION_MANIFEST_VERSION}.`));
+  } else if (!SUPPORTED_EXTRACTION_MANIFEST_VERSIONS.has(manifestSchema)) {
+    issues.push(issue("manifest_schema_mismatch", null, "manifest.schema", `Manifest schema must be ${EXTRACTION_MANIFEST_VERSION} or ${LEGACY_EXTRACTION_MANIFEST_VERSION}.`));
   }
   const casesById = new Map(manifestCases.map((item) => [String(item.case_id), item]));
   const resultsById = new Map<string, JsonObject>();
@@ -108,17 +145,17 @@ function inspectBatch(manifestValue: unknown, resultValues: unknown[]): BatchIns
       issues.push(issue("case_unknown", caseId, "case_id", `Case ${caseId} is not present in the frozen manifest.`));
       continue;
     }
-    validateResult(result, manifestCase, benchmarkId, issues);
+    validateResult(result, manifestCase, benchmarkId, manifestSchema, issues);
   }
   for (const manifestCase of manifestCases) {
     const caseId = String(manifestCase.case_id);
-    validateManifestCase(manifestCase, issues);
+    validateManifestCase(manifestCase, manifestSchema, issues);
     if (!resultsById.has(caseId)) issues.push(issue("case_missing", caseId, "results", `Frozen case ${caseId} has no extraction result.`));
   }
-  return { benchmarkId, manifestCases, resultsById, issues };
+  return { benchmarkId, manifestSchema, manifestCases, resultsById, issues };
 }
 
-function validateManifestCase(manifestCase: JsonObject, issues: ExtractionValidationIssue[]): void {
+function validateManifestCase(manifestCase: JsonObject, manifestSchema: string, issues: ExtractionValidationIssue[]): void {
   const caseId = String(manifestCase.case_id);
   if (stringArray(manifestCase.source_ids).length === 0) {
     issues.push(issue("manifest_sources_missing", caseId, "manifest.source_ids", "A frozen case needs source_ids."));
@@ -164,16 +201,131 @@ function validateManifestCase(manifestCase: JsonObject, issues: ExtractionValida
   for (const sourceId of declaredSources) {
     if (!snapshotSources.has(sourceId)) issues.push(issue("manifest_source_snapshot_missing", caseId, "manifest.source_snapshots", `Source ${sourceId} has no frozen snapshot.`));
   }
+  if (manifestSchema === EXTRACTION_MANIFEST_VERSION) validateV3ManifestCase(manifestCase, declaredSources, issues);
+}
+
+function validateV3ManifestCase(
+  manifestCase: JsonObject,
+  declaredSources: Set<string>,
+  issues: ExtractionValidationIssue[],
+): void {
+  const caseId = String(manifestCase.case_id);
+  const sourceUnits = arrayValue(manifestCase.source_units);
+  const sourceUnitIds = new Set<string>();
+  if (sourceUnits.length === 0) {
+    issues.push(issue("source_units_missing", caseId, "manifest.source_units", "A v3 case needs a frozen source structure inventory."));
+  }
+  sourceUnits.forEach((value, index) => {
+    const row = objectValue(value);
+    const path = `manifest.source_units[${index}]`;
+    const unitId = stringValue(row?.unit_id);
+    if (!row || !unitId || !stringValue(row.locator) || !stringValue(row.content_sha256)) {
+      issues.push(issue("source_unit_invalid", caseId, path, "Source unit needs unit_id, locator, and content_sha256."));
+      return;
+    }
+    if (sourceUnitIds.has(unitId)) issues.push(issue("source_unit_duplicate", caseId, `${path}.unit_id`, `Duplicate source unit ${unitId}.`));
+    sourceUnitIds.add(unitId);
+    if (!declaredSources.has(stringValue(row.source_id))) {
+      issues.push(issue("source_unit_source_undeclared", caseId, `${path}.source_id`, "Source unit must reference a declared Source."));
+    }
+    if (!SOURCE_UNIT_KINDS.has(stringValue(row.unit_kind))) {
+      issues.push(issue("source_unit_kind_invalid", caseId, `${path}.unit_kind`, "unit_kind is not supported."));
+    }
+    if (!FACT_IMPORTANCE.has(stringValue(row.importance))) {
+      issues.push(issue("source_unit_importance_invalid", caseId, `${path}.importance`, "importance must be core, supporting, or context."));
+    }
+    const content = rawStringValue(row.content);
+    const artifactPath = stringValue(row.artifact_path);
+    if (!content && !artifactPath) {
+      issues.push(issue("source_unit_content_missing", caseId, path, "Source unit needs content or artifact_path."));
+    }
+    if (content && sha256(content) !== stringValue(row.content_sha256)) {
+      issues.push(issue("source_unit_hash_mismatch", caseId, `${path}.content_sha256`, "content_sha256 must bind source unit content."));
+    }
+  });
+
+  const questions = arrayValue(manifestCase.questions);
+  const questionIds = new Set<string>();
+  if (questions.length === 0) issues.push(issue("questions_missing", caseId, "manifest.questions", "A v3 case needs frozen consumer questions."));
+  questions.forEach((value, index) => {
+    const row = objectValue(value);
+    const path = `manifest.questions[${index}]`;
+    const questionId = stringValue(row?.question_id);
+    if (!row || !questionId || !stringValue(row.text)) {
+      issues.push(issue("question_invalid", caseId, path, "Question needs question_id and text."));
+      return;
+    }
+    if (questionIds.has(questionId)) issues.push(issue("question_duplicate", caseId, `${path}.question_id`, `Duplicate question ${questionId}.`));
+    questionIds.add(questionId);
+    if (!["core", "supporting"].includes(stringValue(row.importance))) {
+      issues.push(issue("question_importance_invalid", caseId, `${path}.importance`, "Question importance must be core or supporting."));
+    }
+    for (const type of stringArray(row.required_product_types)) {
+      if (!PRODUCT_TYPES.has(type)) issues.push(issue("question_product_type_invalid", caseId, `${path}.required_product_types`, `Unsupported product type ${type}.`));
+    }
+  });
+
+  const referenceFacts = arrayValue(manifestCase.reference_facts);
+  const referenceFactIds = new Set<string>();
+  if (referenceFacts.length === 0) {
+    issues.push(issue("reference_facts_missing", caseId, "manifest.reference_facts", "A v3 case needs an independently frozen reference fact inventory."));
+  }
+  referenceFacts.forEach((value, index) => {
+    const row = objectValue(value);
+    const path = `manifest.reference_facts[${index}]`;
+    const referenceFactId = stringValue(row?.reference_fact_id);
+    if (!row || !referenceFactId || !stringValue(row.statement)) {
+      issues.push(issue("reference_fact_invalid", caseId, path, "Reference fact needs reference_fact_id and statement."));
+      return;
+    }
+    if (referenceFactIds.has(referenceFactId)) issues.push(issue("reference_fact_duplicate", caseId, `${path}.reference_fact_id`, `Duplicate reference fact ${referenceFactId}.`));
+    referenceFactIds.add(referenceFactId);
+    if (!FACT_IMPORTANCE.has(stringValue(row.importance))) {
+      issues.push(issue("reference_fact_importance_invalid", caseId, `${path}.importance`, "importance must be core, supporting, or context."));
+    }
+    const unitRefs = stringArray(row.source_unit_refs);
+    if (unitRefs.length === 0) issues.push(issue("reference_fact_source_units_missing", caseId, `${path}.source_unit_refs`, "Reference fact needs source_unit_refs."));
+    for (const ref of unitRefs) {
+      if (!sourceUnitIds.has(ref)) issues.push(issue("reference_fact_source_unit_unknown", caseId, `${path}.source_unit_refs`, `Unknown source unit ${ref}.`));
+    }
+    for (const ref of stringArray(row.question_refs)) {
+      if (!questionIds.has(ref)) issues.push(issue("reference_fact_question_unknown", caseId, `${path}.question_refs`, `Unknown question ${ref}.`));
+    }
+  });
+
+  const existingIds = new Set<string>();
+  const existingCanonicalKeys = new Set<string>();
+  arrayValue(manifestCase.existing_knowledge).forEach((value, index) => {
+    const row = objectValue(value);
+    const path = `manifest.existing_knowledge[${index}]`;
+    const knowledgeId = stringValue(row?.knowledge_id);
+    const canonicalKey = stringValue(row?.canonical_key);
+    if (!row || !knowledgeId || !canonicalKey) {
+      issues.push(issue("canonical_existing_invalid", caseId, path, "Existing Knowledge needs knowledge_id and canonical_key."));
+      return;
+    }
+    if (existingIds.has(knowledgeId)) issues.push(issue("canonical_existing_id_duplicate", caseId, `${path}.knowledge_id`, `Duplicate existing Knowledge ${knowledgeId}.`));
+    existingIds.add(knowledgeId);
+    if (existingCanonicalKeys.has(canonicalKey)) issues.push(issue("canonical_existing_key_duplicate", caseId, `${path}.canonical_key`, `Multiple existing Knowledge entries use ${canonicalKey}.`));
+    existingCanonicalKeys.add(canonicalKey);
+  });
 }
 
 function validateResult(
   result: JsonObject,
   manifestCase: JsonObject,
   benchmarkId: string,
+  manifestSchema: string,
   issues: ExtractionValidationIssue[],
 ): void {
   const caseId = String(manifestCase.case_id);
-  requireEqual(result, "schema", EXTRACTION_RESULT_VERSION, caseId, issues);
+  requireEqual(
+    result,
+    "schema",
+    manifestSchema === EXTRACTION_MANIFEST_VERSION ? EXTRACTION_RESULT_VERSION : LEGACY_EXTRACTION_RESULT_VERSION,
+    caseId,
+    issues,
+  );
   requireEqual(result, "benchmark_id", benchmarkId, caseId, issues);
   requireEqual(result, "input_fingerprint", stringValue(manifestCase.input_fingerprint), caseId, issues);
   const manifestModes = stringArray(manifestCase.extraction_modes);
@@ -233,6 +385,9 @@ function validateResult(
         issues.push(issue("mode_product_missing", caseId, "products", `Extraction mode ${mode} has no matching typed product.`));
       }
     }
+  }
+  if (manifestSchema === EXTRACTION_MANIFEST_VERSION) {
+    issues.push(...validateInformationLossResult(result, manifestCase, caseId, evidenceIds, factIds, productIds, disposition));
   }
 }
 
@@ -472,6 +627,9 @@ function validateProduct(
     case "decision_card":
       validateDecision(row, path, caseId, issues);
       break;
+    case "principle_card":
+      validatePrinciple(row, path, caseId, issues);
+      break;
     case "playbook":
       validatePlaybook(row, path, caseId, issues);
       break;
@@ -575,6 +733,19 @@ function validateDecision(product: JsonObject, path: string, caseId: string, iss
   }
 }
 
+function validatePrinciple(product: JsonObject, path: string, caseId: string, issues: ExtractionValidationIssue[]): void {
+  const principle = objectValue(product.principle);
+  if (!principle || !stringValue(principle.statement)) {
+    issues.push(issue("principle_missing", caseId, `${path}.principle`, "principle_card needs principle.statement."));
+    return;
+  }
+  for (const field of ["triggers", "scope", "exceptions", "rationale", "retirement_signals"] as const) {
+    if (arrayValue(principle[field]).length === 0) {
+      issues.push(issue(`principle_${field}_missing`, caseId, `${path}.principle.${field}`, `${field} must be explicit; use none or unknown when the source is silent.`));
+    }
+  }
+}
+
 function validatePlaybook(product: JsonObject, path: string, caseId: string, issues: ExtractionValidationIssue[]): void {
   const procedure = objectValue(product.procedure);
   if (!procedure) {
@@ -660,6 +831,9 @@ function verifyResultFidelity(result: JsonObject, manifestCase: JsonObject, issu
       continue;
     }
     snapshots.set(sourceId, content);
+  }
+  if (arrayValue(manifestCase.source_units).length > 0) {
+    issues.push(...verifyFrozenSourceUnits(manifestCase, snapshots));
   }
   for (const value of arrayValue(result.evidence_units)) {
     const evidence = objectValue(value);
@@ -753,6 +927,10 @@ export function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function rawStringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 export function stringArray(value: unknown): string[] {
   return arrayValue(value).flatMap((item) => {
     const text = stringValue(item);
@@ -762,4 +940,8 @@ export function stringArray(value: unknown): string[] {
 
 function sameStrings(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }

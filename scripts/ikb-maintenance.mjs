@@ -3,17 +3,18 @@
 import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { maintenanceSteps } from "./ikb-maintenance-plan.mjs";
+import { legacyMaintenanceSteps, maintenanceSteps } from "./ikb-maintenance-plan.mjs";
+import { parseArgs, runMaintenance } from "./ikb-maintenance-v2.mjs";
 
 // Compatibility export for callers that previously imported the plan from
 // the runner. New code should import the pure plan module directly.
-export { maintenanceSteps };
+export { maintenanceSteps, parseArgs, runMaintenance };
 
 const PROJECT_ROOT = resolve(process.env.IKB_PROJECT_ROOT ?? new URL("..", import.meta.url).pathname);
 const CLI_PATH = join(PROJECT_ROOT, "src", "cli.ts");
 const DEFAULT_HOME = process.env.IKB_HOME ?? join(PROJECT_ROOT, "ikb-data");
 
-export function parseArgs(argv = process.argv.slice(2)) {
+export function parseLegacyArgs(argv = process.argv.slice(2)) {
   const options = { mode: "daily", home: DEFAULT_HOME };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -66,10 +67,33 @@ function summarizeStep(name, result, summary) {
 
 function compactValue(name, value) {
   if (name === "source-ingest") return value ? { scanId: value.scanId, discovered: value.discovered, imported: value.imported, skipped: value.skipped, failed: value.failed } : null;
+  if (name === "agent-team-observe") return value ? { status: value.status, scannedFiles: value.scannedFiles, completedRootTurns: value.completedRootTurns, matchedRootTurns: value.matchedRootTurns, persisted: value.persisted, reused: value.reused, skippedIncomplete: value.skippedIncomplete, issues: value.issues } : null;
+  if (name === "local-memory-sync") return value ? { scanId: value.scanId, discovered: value.discovered, imported: value.imported, skipped: value.skipped, failed: value.failed } : null;
+  if (name === "registered-files-sync") return value ? { scanId: value.scanId, targets: value.discoveredTargets, files: value.discoveredFiles, imported: value.imported, skipped: value.skipped, failedTargets: value.failedTargets, failedFiles: value.failedFiles } : null;
+  if (name === "source-coverage") return value ? { histories: value.histories ? { discovered: value.histories.discovered, covered: value.histories.covered, empty: value.histories.empty, backlog: value.histories.backlog } : null, sources: value.sources?.total ?? null, citadelPending: value.citadel?.pending ?? null, blockers: value.blockers?.length ?? null, inventoryComplete: value.inventoryComplete, stockComplete: value.stockComplete } : null;
   if (name === "source-raw-dedup") return value ? { scannedSources: value.scannedSources, duplicateSources: value.duplicateSources, linkedSources: value.linkedSources, prefixCompactedSources: value.prefixCompactedSources, estimatedSharedGB: Number(((value.estimatedSharedBytes ?? 0) / 1073741824).toFixed(2)), issues: value.issues?.length ?? null } : null;
-  if (name === "experience-triage") return value ? { scannedSources: value.scannedSources, scannedSessions: value.scannedSessions, selected: value.selected, created: value.created, updated: value.updated, unchanged: value.unchanged, unmappedFeedbackEvents: value.unmappedFeedbackEvents } : null;
+  if (name === "experience-triage") return value ? {
+    scannedSources: value.scannedSources,
+    scannedSessions: value.scannedSessions,
+    matchedSessions: value.matchedSessions,
+    selected: value.selected,
+    remainingSelected: value.remainingSelected,
+    created: value.created,
+    updated: value.updated,
+    unchanged: value.unchanged,
+    feedbackSelected: value.feedbackSelected,
+    feedbackCreated: value.feedbackCreated,
+    feedbackUpdated: value.feedbackUpdated,
+    feedbackUnchanged: value.feedbackUnchanged,
+    unmappedFeedbackEvents: value.unmappedFeedbackEvents,
+  } : null;
+  if (name === "experience-analysis-queue") return Array.isArray(value) ? { queued: value.length, top: value.slice(0, 10).map((item) => ({ experienceId: item.experienceId, priority: item.priority, reasons: item.priorityReasons })) } : null;
   if (name === "experience-cluster") return value ? { clusters: value.clusters, eligible: value.eligible, created: value.created, updated: value.updated, unchanged: value.unchanged, pending: value.pending?.length ?? 0 } : null;
-  if (name === "people-rebuild") return Array.isArray(value) ? { people: value.length, matched: value.reduce((total, item) => total + (item.matchedCount ?? 0), 0), direct: value.reduce((total, item) => total + (item.directMatchedCount ?? 0), 0) } : null;
+  if (name === "people-rebuild") {
+    const results = Array.isArray(value) ? value : (Array.isArray(value?.results) ? value.results : []);
+    return { people: results.length, matched: results.reduce((total, item) => total + (item.matchedCount ?? 0), 0), direct: results.reduce((total, item) => total + (item.directMatchedCount ?? 0), 0) };
+  }
+  if (name === "people-readiness") return value ? { mode: value.mode, people: value.summary?.registeredEvidence ?? 0, analysisDue: value.summary?.analysisDue ?? 0, upToDate: value.summary?.upToDate ?? 0, insufficientEvidence: value.summary?.insufficientEvidence ?? 0, accumulating: value.summary?.accumulating ?? 0 } : null;
   if (name === "knowledge-rebuild") return Array.isArray(value) ? { scopes: value.length } : value ?? null;
   if (name === "candidate-discover") {
     const results = Array.isArray(value) ? value : (Array.isArray(value?.results) ? value.results : null);
@@ -105,10 +129,33 @@ function compactValue(name, value) {
       decisionBundles: value.decisionBundles?.length ?? 0,
     } : null;
   }
-  if (name === "doctor") return value ? { ok: value.ok, events: value.events, sources: value.sources, candidates: value.candidates, experiences: value.experiences, experienceCandidates: value.experienceCandidates, brokenChains: value.brokenChains?.length ?? null, sourceIssues: value.sourceIssues?.length ?? null, experienceIssues: value.experienceIssues?.length ?? null } : null;
+  if (name === "doctor") return value ? {
+    ok: value.ok,
+    events: value.events,
+    sources: value.sources,
+    candidates: value.candidates,
+    experiences: value.experiences,
+    experienceCandidates: value.experienceCandidates,
+    experienceReviewPackages: value.experienceReviewPackages ? {
+      registered: value.experienceReviewPackages.registered,
+      current: value.experienceReviewPackages.current,
+      issues: compactCount(value.experienceReviewPackages.issues),
+    } : { registered: null, current: null, issues: compactCount(value.experienceReviewIssues) },
+    brokenChains: compactCount(value.brokenChains),
+    sourceIssues: compactCount(value.sourceIssues),
+    candidateIssues: compactCount(value.candidateIssues),
+    experienceIssues: compactCount(value.experienceIssues),
+    knowledgeLayoutOk: value.knowledgeLayout?.ok ?? value.knowledgeLayoutOk ?? null,
+    knowledgeQualityIssues: compactCount(value.knowledgeLayout?.qualityIssues ?? value.knowledgeLayoutQualityIssues),
+  } : null;
   if (name === "ledger") return value?.replay ? { brokenChains: value.replay.brokenChains?.length ?? null } : value ?? null;
   if (name === "report") return { generated: true };
   return value ?? null;
+}
+
+function compactCount(value) {
+  if (Array.isArray(value)) return value.length;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export function maintenanceRunPlan(steps) {
@@ -123,13 +170,13 @@ export function maintenanceRunPlan(steps) {
 }
 
 export function writeMaintenanceRunPlan(runDir, steps) {
-  const path = join(runDir, "plan.json");
+  const path = join(runDir, "maintenance-plan-input.json");
   writeFileSync(path, `${JSON.stringify(maintenanceRunPlan(steps), null, 2)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
   return path;
 }
 
-export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
+export function runLegacyMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
   const maintenanceDir = join(home, "maintenance");
   const lockPath = join(maintenanceDir, ".lock");
   const runsDir = join(maintenanceDir, "runs");
@@ -172,8 +219,8 @@ export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
     return artifactId;
   };
   const receiverForStep = (name) => {
-    if (name === "source-ingest" || name === "source-raw-dedup" || name === "candidate-discover" || name === "candidate-resolve") return "ikb-intake";
-    if (name === "people-rebuild" || name === "experience-triage" || name === "reasoning") return "ikb-analyst";
+    if (name === "local-memory-sync" || name === "registered-files-sync" || name === "source-ingest" || name === "source-coverage" || name === "source-raw-dedup" || name === "candidate-discover" || name === "candidate-resolve") return "ikb-intake";
+    if (name === "people-rebuild" || name === "people-readiness" || name === "experience-triage" || name === "experience-analysis-queue" || name === "reasoning") return "ikb-analyst";
     if (name === "knowledge-rebuild" || name === "knowledge-archive" || name === "knowledge-lint") return "ikb-curator";
     if (name === "doctor" || name === "ledger") return "ikb-verifier";
     return "ikb-harness";
@@ -188,7 +235,13 @@ export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
     runDir = run.value?.runDir ?? null;
     summary.taskId = taskId;
     summary.runId = runId;
-    writeMaintenanceRunPlan(runDir, maintenanceSteps(mode));
+    const planInput = writeMaintenanceRunPlan(runDir, legacyMaintenanceSteps(mode));
+    const planned = runCli(home, ["run", "plan", runId, "--file", planInput]);
+    if (!planned.ok) {
+      runCli(home, ["run", "finish", runId, "--status", "failed", "--summary", "maintenance plan validation failed"]);
+      runCli(home, ["task", "wait", taskId, "--reason", "维护计划未通过 Core 校验"]);
+      return planned;
+    }
     runEvent("run.loop_started", { loopId: "inner", iteration: 1, inputRefs: ["scope:work", `mode:${mode}`], outputRefs: [], contextHash: null });
     return { ok: Boolean(runId), value: run.value };
   };
@@ -207,12 +260,12 @@ export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
     entry.status = ok ? "succeeded" : "failed";
     if (ok) {
       entry.value = compactValue(step.name, result.value);
-      const artifactId = writeStepArtifact(step.name, result.value ?? { generated: true });
+      const artifactId = writeStepArtifact(step.name, entry.value ?? { generated: true });
       if (artifactId) entry.artifactId = artifactId;
       else summary.failures.push({ name: `artifact:${step.name}`, error: "successful maintenance step did not produce a registered Artifact" });
       runEvent("run.handoff", { handoffId: `handoff:${step.name}`, stepId: step.name, fromRole: "ikb-harness", toRole: receiverForStep(step.name), inputRefs: step.dependsOn.map((dependency) => `step:${dependency}`), outputRefs: artifactId ? [`artifact:${artifactId}`] : [], contractVersion: "ikb-maintenance.v1" });
       runEvent("run.step_finished", { stepId: step.name, stepName: step.name, loopId: "inner", iteration: 1, inputRefs: step.dependsOn.map((dependency) => `step:${dependency}`), outputRefs: artifactId ? [`artifact:${artifactId}`] : [], status: "succeeded", nextAction: null });
-      const gateId = step.name.includes("knowledge") || step.name === "reasoning" || step.name === "experience-triage" ? "G2" : step.name === "doctor" || step.name === "ledger" ? "G6" : "G1";
+      const gateId = step.name.includes("knowledge") || step.name === "reasoning" || step.name === "experience-triage" || step.name === "experience-analysis-queue" ? "G2" : step.name === "doctor" || step.name === "ledger" ? "G6" : "G1";
       runEvent("run.gate_evaluated", { gateId, decision: "pass", reasonCode: null, evidenceRefs: artifactId ? [`artifact:${artifactId}`] : [], gateVersion: "ikb-maintenance.v1" });
     } else {
       runEvent("run.step_finished", { stepId: step.name, stepName: step.name, loopId: "inner", iteration: 1, inputRefs: step.dependsOn.map((dependency) => `step:${dependency}`), outputRefs: [], status: "failed", errorCode: "step_failed", nextAction: "review_summary_then_retry" });
@@ -223,10 +276,10 @@ export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
     const started = startRun();
     if (!started.ok) throw new Error(started.error ?? "failed to start maintenance Run");
     const completed = new Map();
-    for (const step of maintenanceSteps(mode)) completed.set(step.name, required(step, completed));
+    for (const step of legacyMaintenanceSteps(mode)) completed.set(step.name, required(step, completed));
     const allStepsSucceeded = summary.steps.every((step) => step.status === "succeeded");
     const maintenanceStepsSucceeded = summary.failures.length === 0 && allStepsSucceeded;
-    const lastStepName = maintenanceSteps(mode).at(-1)?.name;
+    const lastStepName = legacyMaintenanceSteps(mode).at(-1)?.name;
     runEvent("run.step_started", { stepId: "maintenance-summary", stepName: "maintenance-summary", loopId: "inner", iteration: 1, inputRefs: lastStepName ? [`step:${lastStepName}`] : [], outputRefs: [] });
     let summaryArtifact = null;
     if (maintenanceStepsSucceeded) {
@@ -281,6 +334,13 @@ export function runMaintenance({ mode = "daily", home = DEFAULT_HOME } = {}) {
       const taskTransition = runCli(home, summary.ok ? ["task", "done", taskId, "--reason", "维护 Run 已通过验收", ...(summaryArtifact ? ["--evidence", summaryArtifact] : [])] : ["task", "wait", taskId, "--reason", "维护 Run 存在失败或阻断步骤"]);
       if (!taskTransition.ok) summary.failures.push({ name: "task-transition", error: taskTransition.error, exitCode: taskTransition.exitCode ?? null });
     }
+    // The ledger step inside the Run cannot cover the Run's own terminal,
+    // evaluation and Task-transition events. Verify once more after those
+    // writes, then refresh the compact health projection without appending a
+    // new ledger event. This gives the live report a genuinely current check.
+    const finalLedger = runCli(home, ["ledger", "verify", "--write-summary"]);
+    if (!finalLedger.ok) summary.failures.push({ name: "final-ledger", error: finalLedger.error, exitCode: finalLedger.exitCode ?? null });
+    summary.finalLedger = finalLedger.ok ? compactValue("ledger", finalLedger.value) : { error: finalLedger.error };
     if (summary.failures.length > 0) summary.ok = false;
     // The JSON summary is the human-facing projection. Rewrite it after the
     // summary Artifact and Task transition so the projection includes the

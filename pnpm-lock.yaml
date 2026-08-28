@@ -6,4 +6,19 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      yaml:
+        specifier: 2.8.2
+        version: 2.8.2
+
+packages:
+
+  yaml@2.8.2:
+    resolution: {integrity: sha1-VpTyXsoM6cPnqdngDODdq72eNcU=, tarball: http://r.npm.sankuai.com/yaml/download/yaml-2.8.2.tgz}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
+snapshots:
+
+  yaml@2.8.2: {}

@@ -1,9 +1,47 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { archiveRetiredKnowledge, captureKnowledge, buildContextPack, completeKnowledgeMigration, ingestKnowledge, initializeKnowledgeLayout, inspectKnowledgeLayout, isPersonalAdmissionReady, listKnowledge, migrateLegacyKnowledge, rebuildKnowledgeViews, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
+import { KNOWLEDGE_CANDIDATE_TYPES, KNOWLEDGE_DIRECTORIES, archiveRetiredKnowledge, captureKnowledge, buildContextPack, completeKnowledgeMigration, findKnowledge, ingestKnowledge, initializeKnowledgeLayout, inspectKnowledgeLayout, isPersonalAdmissionReady, knowledgeRetrievalEligibility, knowledgeRetrievalEligibilityAtHome, listKnowledge, migrateLegacyKnowledge, rebuildKnowledgeViews, relateKnowledge, searchKnowledge, reviewKnowledge, updateKnowledgeStatus } from "../src/knowledge.ts";
+import type { KnowledgeInput } from "../src/knowledge.ts";
+import { writeReceipt } from "../src/receipt.ts";
+import { LedgerStore } from "../src/store.ts";
+import { initializeHome } from "../src/commands/system.ts";
+import { resolveLedgerPath } from "../src/layout.ts";
+
+function principleInput(overrides: Partial<KnowledgeInput> = {}): KnowledgeInput {
+  return {
+    title: "Evidence before escalation",
+    type: "principle",
+    scope: "work",
+    sourceKind: "manual",
+    sourceRefs: ["artifact:principle-review-1"],
+    status: "draft",
+    qualityVersion: 5,
+    productType: "principle_card",
+    canonicalKey: "work:principle:evidence-before-escalation",
+    compilationSchema: "ikb-knowledge-compilation-result.v3",
+    compilationCaseId: "case-principle-1",
+    compilationProductId: "product-principle-1",
+    extractionManifestRef: "artifact:manifest-principle-1",
+    compilationRef: "artifact:compilation-principle-1",
+    informationLossRef: "artifact:loss-principle-1",
+    factRefs: ["fact:principle-1"],
+    questionsAnswered: ["When should escalation require more evidence?"],
+    admissionReason: "This rule constrains recurring execution decisions.",
+    applicability: "When deciding whether to escalate a blocked task.",
+    boundary: "It does not replace incident-specific evidence.",
+    confidence: "high",
+    confidenceBasis: ["Reviewed source and compilation artifacts."],
+    temporalState: "current",
+    verification: "unverified",
+    body: "Require current evidence before escalating a blocked task.",
+    ...overrides,
+  };
+}
 
 test("knowledge capture writes frontmatter and search returns source-scoped results", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-kb-test-"));
@@ -20,6 +58,297 @@ test("knowledge capture writes frontmatter and search returns source-scoped resu
   assert.equal(searchKnowledge(home, "line reference", { scope: "personal" })[0].id, record.id);
   assert.equal(searchKnowledge(home, "line reference", { scope: "work" }).length, 0);
   assert.equal(reviewKnowledge(home, "personal").length, 1);
+});
+
+test("principle is a formal candidate type and defaults to the principles review collection", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-principle-schema-test-"));
+  assert.equal(KNOWLEDGE_CANDIDATE_TYPES.includes("principle"), true);
+  assert.equal(KNOWLEDGE_DIRECTORIES.includes("principles"), true);
+  assert.throws(
+    () => captureKnowledge(home, principleInput({ qualityVersion: 1, canonicalKey: "work:principle:pre-compilation" })),
+    /principle_quality_version_insufficient/,
+  );
+  assert.throws(
+    () => captureKnowledge(home, principleInput({ productType: "decision_card" })),
+    /principle_product_type_mismatch/,
+  );
+  assert.throws(() => captureKnowledge(home, principleInput({ admissionReason: "" })), /admission_reason_missing/);
+
+  const draft = captureKnowledge(home, principleInput());
+  assert.equal(draft.collection, "principles");
+  assert.equal(findKnowledge(home, draft.id)?.id, draft.id);
+  assert.equal(listKnowledge(home, "work").some((record) => record.id === draft.id), true);
+  assert.equal(reviewKnowledge(home, "work").some((record) => record.id === draft.id), true);
+  assert.equal(inspectKnowledgeLayout(home, "work").qualityIssues.length, 0);
+  assert.match(draft.path, /\/principles\//);
+});
+
+test("draft principle remains auditable but is excluded from default search and context", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-principle-draft-eligibility-test-"));
+  const draft = captureKnowledge(home, principleInput());
+
+  assert.deepEqual(knowledgeRetrievalEligibility(draft), { eligible: false, reason: "principle_status_not_verified" });
+  assert.equal(listKnowledge(home, "work").some((record) => record.id === draft.id), true);
+  assert.equal(searchKnowledge(home, "evidence escalation", { scope: "work" }).some((result) => result.id === draft.id), false);
+  const context = buildContextPack(home, {
+    taskId: "task-principle-draft",
+    title: "Evidence escalation",
+    goal: "Decide whether to escalate a blocked task.",
+    acceptance: "Use only confirmed principles.",
+    scope: "work",
+  });
+  assert.equal(context.results.some((result) => result.id === draft.id), false);
+});
+
+test("source-confirmed principle cannot pass ordinary verify or enter default retrieval even if status is edited", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-principle-source-confirmed-test-"));
+  const draft = captureKnowledge(home, principleInput({ verification: "source_confirmed" }));
+
+  assert.throws(() => updateKnowledgeStatus(home, draft.id, "verified"), /principle_verification_insufficient/);
+  const cli = spawnSync(join(process.cwd(), "bin", "ikb"), ["knowledge", "verify", draft.id, "--home", home, "--json"], { encoding: "utf8" });
+  assert.notEqual(cli.status, 0);
+  assert.match(cli.stderr, /principle_verification_insufficient/);
+
+  writeFileSync(draft.path, readFileSync(draft.path, "utf8").replace("status: draft", "status: verified"));
+  const edited = findKnowledge(home, draft.id)!;
+  assert.equal(edited.status, "verified");
+  assert.deepEqual(knowledgeRetrievalEligibility(edited), { eligible: false, reason: "principle_verification_not_user_confirmed" });
+  assert.equal(searchKnowledge(home, "evidence escalation", { scope: "work" }).some((result) => result.id === draft.id), false);
+
+  writeFileSync(draft.path, readFileSync(draft.path, "utf8").replace("verification: source_confirmed", "verification: task_validated"));
+  const taskValidated = findKnowledge(home, draft.id)!;
+  assert.deepEqual(knowledgeRetrievalEligibility(taskValidated), { eligible: false, reason: "principle_verification_not_user_confirmed" });
+});
+
+test("user-confirmed frontmatter cannot bypass the reviewed Principle lifecycle", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-principle-user-confirmed-test-"));
+  assert.throws(() => captureKnowledge(home, principleInput({
+    status: "verified",
+    verification: "user_confirmed",
+    sourceRefs: ["user-confirmation:principle-review-1", "artifact:principle-review-1"],
+  })), /principle_confirmation_chain_invalid/);
+
+  const draft = captureKnowledge(home, principleInput({ verification: "user_confirmed" }));
+  writeFileSync(draft.path, readFileSync(draft.path, "utf8").replace("status: draft", "status: verified"));
+  const edited = findKnowledge(home, draft.id)!;
+  assert.deepEqual(knowledgeRetrievalEligibility(edited), { eligible: true, reason: null });
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(home, edited), { eligible: false, reason: "principle_confirmation_chain_invalid" });
+  assert.equal(searchKnowledge(home, "evidence escalation", { scope: "work" }).some((result) => result.id === edited.id), false);
+  assert.equal(inspectKnowledgeLayout(home, "work").qualityIssues.some((issue) => issue.code === "principle_confirmation_chain_invalid"), true);
+  const lint = spawnSync(join(process.cwd(), "bin", "ikb"), ["knowledge", "lint", edited.id, "--home", home, "--json"], { encoding: "utf8" });
+  assert.equal(lint.status, 2, lint.stderr);
+  assert.equal(JSON.parse(lint.stdout).results[0].issues.some((issue: { code: string }) => issue.code === "principle_confirmation_chain_invalid"), true);
+});
+
+test("Receipt confirmation chain admits a confirmed single-page Principle and fails closed when evidence is altered", () => {
+  const createConfirmedReceipt = () => {
+    const home = mkdtempSync(join(tmpdir(), "ikb-principle-receipt-chain-"));
+    initializeHome(home);
+    const draft = captureKnowledge(home, principleInput({ verification: "user_confirmed" }));
+    writeFileSync(draft.path, readFileSync(draft.path, "utf8")
+      .replace("status: draft", "status: verified")
+      .replace("verification: user_confirmed", "verification: user_confirmed"));
+    const current = findKnowledge(home, draft.id)!;
+    const proposalPath = join(home, "inbox", "work", "confirmations", `${current.id}-proposal.md`);
+    mkdirSync(join(home, "inbox", "work", "confirmations"), { recursive: true });
+    writeFileSync(proposalPath, readFileSync(current.path, "utf8"));
+    const exactTextHash = sha256(readFileSync(proposalPath, "utf8"));
+    const store = new LedgerStore({ home });
+    const receipt = writeReceipt(home, store, {
+      kind: "semantic_maintenance",
+      scope: "work",
+      command: "semantic-maintenance",
+      startedAt: "2026-08-27T00:00:00.000Z",
+      outcome: "succeeded",
+      operations: [{
+        action: "confirm",
+        subjectRef: `knowledge://${current.id}`,
+        inputRefs: [proposalPath, join(home, "inbox", "work", "confirmations", "brief.md")],
+        outputRefs: [`knowledge://${current.id}`],
+        sourceRefs: current.sourceRefs,
+        beforeHash: null,
+        afterHash: sha256(readFileSync(current.path, "utf8")),
+        applicability: current.applicability,
+        boundary: current.boundary,
+        validation: { status: "passed", checks: ["human confirmation"], issues: [] },
+        outcome: "confirmed",
+        confirmation: { actor: "reviewer", confirmedAt: "2026-08-27T00:00:00.000Z", exactTextHash },
+      }],
+    });
+    store.close();
+    return { home, current: findKnowledge(home, current.id)!, proposalPath, receipt };
+  };
+
+  const valid = createConfirmedReceipt();
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(valid.home, valid.current), { eligible: true, reason: null });
+
+  const proposalTampered = createConfirmedReceipt();
+  writeFileSync(proposalTampered.proposalPath, "tampered proposal\n");
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(proposalTampered.home, proposalTampered.current), { eligible: false, reason: "principle_confirmation_chain_invalid" });
+
+  const receiptTampered = createConfirmedReceipt();
+  writeFileSync(receiptTampered.receipt.path, `${readFileSync(receiptTampered.receipt.path, "utf8").replace("confirmed", "tampered")}\n`);
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(receiptTampered.home, receiptTampered.current), { eligible: false, reason: "principle_confirmation_chain_invalid" });
+
+  const missingLedger = createConfirmedReceipt();
+  writeFileSync(resolveLedgerPath(missingLedger.home), "");
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(missingLedger.home, missingLedger.current), { eligible: false, reason: "principle_confirmation_chain_invalid" });
+
+  const wrongAfterHash = createConfirmedReceipt();
+  const receiptJson = JSON.parse(readFileSync(wrongAfterHash.receipt.path, "utf8"));
+  receiptJson.operations[0].afterHash = "0".repeat(64);
+  const content = `${JSON.stringify(receiptJson, null, 2)}\n`;
+  writeFileSync(wrongAfterHash.receipt.path, content);
+  // Keep the ledger binding current to prove the after-hash gate itself rejects.
+  const ledgerPath = resolveLedgerPath(wrongAfterHash.home);
+  const ledger = readFileSync(ledgerPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  ledger[0].payload.contentHash = sha256(content);
+  writeFileSync(ledgerPath, `${ledger.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  assert.deepEqual(knowledgeRetrievalEligibilityAtHome(wrongAfterHash.home, wrongAfterHash.current), { eligible: false, reason: "principle_confirmation_chain_invalid" });
+});
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+test("ordinary verified source-confirmed knowledge keeps its existing retrieval behavior", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-principle-ordinary-regression-test-"));
+  const fact = captureKnowledge(home, {
+    title: "Ordinary retry evidence",
+    type: "fact",
+    scope: "work",
+    status: "verified",
+    verification: "source_confirmed",
+    sourceRefs: ["artifact:ordinary-fact-1"],
+    body: "Ordinary retry evidence remains searchable after source confirmation.",
+  });
+
+  assert.deepEqual(knowledgeRetrievalEligibility(fact), { eligible: true, reason: null });
+  assert.equal(searchKnowledge(home, "ordinary retry evidence", { scope: "work" }).some((result) => result.id === fact.id), true);
+});
+
+test("Memory Topic cards stay review-only until verified with high confidence and a resolved time boundary", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-memory-topic-admission-test-"));
+  const draft = captureKnowledge(home, {
+    title: "Migrated Memory Topic",
+    type: "synthesis",
+    scope: "work",
+    status: "draft",
+    tags: ["memory-topic"],
+    confidence: "medium",
+    temporalState: "mixed",
+    verification: "source_confirmed",
+    sourceRefs: ["artifact:memory-topic-source"],
+    body: "A migrated topic is evidence-backed but not yet admitted.",
+  });
+  assert.deepEqual(knowledgeRetrievalEligibility(draft), { eligible: false, reason: "memory_topic_status_not_verified" });
+  assert.equal(searchKnowledge(home, "migrated topic", { scope: "work" }).some((result) => result.id === draft.id), false);
+  assert.throws(() => updateKnowledgeStatus(home, draft.id, "verified"), /memory_topic_confidence_insufficient/);
+
+  const admitted = captureKnowledge(home, {
+    title: "Verified current Memory Topic fact",
+    type: "fact",
+    scope: "work",
+    status: "verified",
+    tags: ["memory-topic"],
+    confidence: "high",
+    temporalState: "current",
+    verification: "source_confirmed",
+    sourceRefs: ["artifact:current-authoritative-source"],
+    body: "A current, high-confidence fact may enter retrieval after verification.",
+  });
+  assert.deepEqual(knowledgeRetrievalEligibility(admitted), { eligible: true, reason: null });
+  assert.equal(searchKnowledge(home, "high-confidence fact", { scope: "work" }).some((result) => result.id === admitted.id), true);
+});
+
+test("pending revision candidates place target Knowledge on a retrieval hold", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-knowledge-hold-test-"));
+  const record = captureKnowledge(home, { title: "旧的无条件重试规则", scope: "work", status: "verified", sourceRefs: ["manual:user"], body: "失败后总是直接重试。" });
+  const directory = join(home, "experiences", "candidates");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, "exp-cand-revise.json");
+  writeFileSync(path, JSON.stringify({
+    schema: "ikb-knowledge-candidate.v1",
+    id: "exp-cand-revise",
+    status: "pending_review",
+    title: "待复核知识修订：无条件重试",
+    changeTypes: ["revise"],
+    targetKnowledgeIds: [record.id],
+    candidateKnowledge: { claim: "重试前先确认根因。" },
+    createdAt: "2026-08-01T00:00:00Z"
+  }, null, 2));
+  assert.equal(searchKnowledge(home, "无条件重试", { scope: "work" }).length, 0);
+  assert.equal(searchKnowledge(home, "无条件重试", { scope: "work", includeHeld: true })[0].id, record.id);
+  assert.equal(buildContextPack(home, { taskId: "task-hold", title: "无条件重试", goal: "执行旧规则", acceptance: "完成", scope: "work" }).results.length, 0);
+  writeFileSync(path, readFileSync(path, "utf8").replace('"pending_review"', '"accepted"'));
+  assert.equal(searchKnowledge(home, "无条件重试", { scope: "work" }).length, 0);
+  writeFileSync(path, readFileSync(path, "utf8").replace('"accepted"', '"rejected"'));
+  assert.equal(searchKnowledge(home, "无条件重试", { scope: "work" })[0].id, record.id);
+});
+
+test("legacy person observations stay auditable but fail closed in default retrieval", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-legacy-person-retrieval-test-"));
+  const legacyPerson = captureKnowledge(home, {
+    title: "旧人物协作观察",
+    type: "preference",
+    collection: "people",
+    scope: "work",
+    sourceKind: "artifact",
+    sourceRefs: ["artifact:legacy-person"],
+    qualityVersion: 3,
+    admissionReason: "旧版本曾用于协作准备。",
+    applicability: "架构评审协作。",
+    boundary: "没有完成跨来源和反证复核。",
+    useWhen: "准备人物协作时。",
+    useInputs: ["旧人物证据"],
+    useOutputs: ["旧协作建议"],
+    useSteps: ["读取旧观察", "核对来源"],
+    useChecks: ["不推断人格"],
+    useStopConditions: ["反证未完成"],
+    confidenceBasis: ["两个旧 Episode"],
+    identityConfidence: "high",
+    patternConfidence: "medium",
+    independentEpisodeCount: 2,
+    body: "评审协作时先讲边界和证据。",
+  });
+  const currentPerson = captureKnowledge(home, {
+    title: "当前人物协作观察",
+    type: "preference",
+    collection: "people",
+    scope: "work",
+    sourceKind: "artifact",
+    sourceRefs: ["src:person-1", "src:person-2"],
+    qualityVersion: 4,
+    productType: "person_observation",
+    compilationRef: "artifact:person-compilation",
+    factRefs: ["fact:episode-1", "fact:episode-2", "fact:episode-3"],
+    questionsAnswered: ["怎样准备架构评审协作？"],
+    admissionReason: "重复观察会改变下一次评审材料准备。",
+    applicability: "同一职责范围内的架构评审。",
+    boundary: "不用于人格、能力、人事或最终决策权判断。",
+    confidenceBasis: ["三个独立 Episode，跨两个来源和日期"],
+    identityConfidence: "high",
+    patternConfidence: "medium",
+    independentEpisodeCount: 3,
+    independentSourceCount: 2,
+    distinctDateCount: 2,
+    counterevidenceSearch: "检索相同职责与日期窗口中的不同评审顺序和反例。",
+    doNotUseFor: ["人格判断", "替代正式决策权"],
+    body: "评审协作时先讲边界和证据，并根据任务相关性决定是否加载。",
+  });
+  const legacyDomain = captureKnowledge(home, {
+    title: "旧领域事实",
+    type: "fact",
+    collection: "concepts",
+    scope: "work",
+    body: "旧领域事实仍可用于边界和证据检索。",
+  });
+
+  assert.ok(listKnowledge(home, "work").some((record) => record.id === legacyPerson.id));
+  assert.deepEqual(searchKnowledge(home, "边界和证据", { scope: "work" }).map((item) => item.id), [legacyDomain.id]);
+  const context = buildContextPack(home, { taskId: "task-person-safe", title: "人物协作", goal: "准备架构评审的边界和证据", acceptance: "不加载旧人物观察", scope: "work" });
+  assert.equal(context.results.some((item) => item.id === legacyPerson.id), false);
+  assert.equal(context.results.some((item) => item.id === currentPerson.id), true);
 });
 
 test("retired knowledge stays auditable but is excluded from default retrieval and separated in indexes", () => {
@@ -199,7 +528,7 @@ test("document ingest preserves quality version and parsed lifecycle metadata", 
 
 test("context pack includes verified and draft knowledge with an explicit use policy", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-context-test-"));
-  const draft = captureKnowledge(home, { title: "Draft note", body: "technical plan source", scope: "personal", status: "draft" });
+  const draft = captureKnowledge(home, { title: "Draft technical plan source", body: "technical plan source", scope: "personal", status: "draft" });
   const verified = captureKnowledge(home, {
     title: "Verified plan rule",
     type: "fact",
@@ -225,11 +554,852 @@ test("context pack includes verified and draft knowledge with an explicit use po
   assert.equal(context.results.length, 2);
   assert.deepEqual(new Set(context.results.map((item) => item.id)), new Set([draft.id, verified.id]));
   assert.match(context.markdown, /Use policy: verified \+ draft/);
-  assert.match(context.markdown, /Draft note/);
+  assert.match(context.markdown, /Draft technical plan source/);
   assert.match(context.markdown, /Verified plan rule/);
   const strict = buildContextPack(home, { taskId: "task-1", title: "plan", goal: "technical plan", acceptance: "source", includeDrafts: false });
   assert.equal(strict.results.length, 1);
   assert.equal(strict.results[0].id, verified.id);
+});
+
+test("context pack excludes low-score noise when a clearly stronger Knowledge match exists", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-relevance-test-"));
+  const strong = captureKnowledge(home, {
+    title: "Knowledge 修订事务恢复与冲突验证",
+    scope: "personal",
+    body: "候选确认后保存前后快照，冲突时停止覆盖，并从 journal 恢复。",
+  });
+  captureKnowledge(home, { title: "泛化编码建议", scope: "personal", body: "修订事务可以作为一般背景。" });
+  captureKnowledge(home, { title: "泛化评审建议", scope: "personal", body: "修订事务可以作为一般上下文。" });
+  const context = buildContextPack(home, {
+    taskId: "task-relevance",
+    title: "Knowledge 修订事务",
+    goal: "验证恢复与冲突",
+    acceptance: "候选确认和快照可验证",
+    scope: "personal",
+  });
+  assert.deepEqual(context.results.map((item) => item.id), [strong.id]);
+  assert.equal(context.retrieval.candidates, 3);
+  assert.equal(context.retrieval.excludedLowScoreIds.length, 2);
+  assert.match(context.markdown, /absolute anchor cutoff score/);
+});
+
+test("context pack uses the task title as a topic anchor before broad goal and acceptance terms", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-title-anchor-test-"));
+  const target = captureKnowledge(home, {
+    title: "机票预订模型与验价边界",
+    scope: "work",
+    body: "多乘机人分单前先核对预订领域对象和当前验价入口。",
+  });
+  const noise = captureKnowledge(home, {
+    title: "返现资损复盘",
+    scope: "work",
+    body: "验价 风险 边界 证据 验证 影响范围 关键不变量 验证入口 ".repeat(20),
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-title-anchor",
+    title: "机票预订编码前知识路由",
+    goal: "修改多乘机人分单与验价链路，识别关键不变量、影响范围和验证入口",
+    acceptance: "返回风险、边界、证据和验证清单",
+    scope: "work",
+  });
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.results.some((item) => item.id === noise.id), false);
+  assert.equal(context.retrieval.candidates, 2);
+  assert.equal(context.retrieval.anchorApplied, true);
+  assert.equal(context.retrieval.anchorMatches, 1);
+  assert.match(context.markdown, /title anchor retained 1/);
+});
+
+test("context pack returns zero results when Pi/Magent only overlaps cross-domain code architecture cards", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-cross-domain-parent-anchor-test-"));
+  captureKnowledge(home, {
+    title: "Token 预算代码架构图",
+    scope: "work",
+    body: "代码架构图用于 Token 预算模型。",
+    useWhen: "生成代码架构图时。",
+    questionsAnswered: ["如何生成代码架构图？"],
+  });
+  captureKnowledge(home, {
+    title: "RCF Agent 归属代码架构图",
+    scope: "work",
+    body: "代码架构图用于 RCF Agent 归属关系。",
+    useWhen: "生成代码架构图时。",
+    questionsAnswered: ["如何生成代码架构图？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-pi-magent-cross-domain",
+    title: "Pi/Magent 代码架构图",
+    goal: "梳理 Pi/Magent 的调用关系",
+    acceptance: "输出代码架构图",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results, []);
+  assert.deepEqual(context.units, []);
+});
+
+test("context pack leaves a generic code architecture task empty instead of routing Token or RCF cards", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-generic-parent-anchor-test-"));
+  captureKnowledge(home, {
+    title: "Token 预算代码架构图",
+    scope: "work",
+    body: "代码架构图用于生成 Token 预算方案。",
+    useWhen: "生成代码架构图时。",
+    questionsAnswered: ["如何生成代码架构图？"],
+  });
+  captureKnowledge(home, {
+    title: "RCF Agent 归属代码架构图",
+    scope: "work",
+    body: "代码架构图用于生成 RCF Agent 归属方案。",
+    useWhen: "生成代码架构图时。",
+    questionsAnswered: ["如何生成代码架构图？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-generic-code-architecture",
+    taskType: "coding",
+    title: "代码架构图",
+    goal: "生成方案",
+    acceptance: "输出代码架构图",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results, []);
+  assert.deepEqual(context.units, []);
+});
+
+test("document context does not select a generic document card without an entity anchor", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-generic-document-anchor-test-"));
+  captureKnowledge(home, {
+    title: "通用文档事实边界说明",
+    scope: "work",
+    body: "文档说明应当区分事实和边界。",
+    useWhen: "撰写文档说明时。",
+    questionsAnswered: ["文档事实边界如何说明？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-generic-document-anchor",
+    taskType: "document",
+    title: "文档说明",
+    goal: "生成方案",
+    acceptance: "事实和边界分开",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results, []);
+  assert.deepEqual(context.units, []);
+});
+
+test("document title routing does not reenter a typed snippet-only card without document intent", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-document-typed-legacy-test-"));
+  const documentCard = captureKnowledge(home, {
+    title: "技术文档事实与边界写作卡",
+    scope: "work",
+    body: "技术文档要分开当前事实、计划、未知和证据。",
+    useWhen: "撰写技术文档或阶段效果说明时。",
+    questionsAnswered: ["技术文档怎样保留事实边界？"],
+  });
+  const typedLure = captureKnowledge(home, {
+    title: "跨域运行事实卡",
+    scope: "work",
+    sourceKind: "manual",
+    sourceRefs: ["src-demo:typed-lure"],
+    qualityVersion: 4,
+    productType: "fact_card",
+    compilationRef: "artifact:typed-lure",
+    factRefs: ["fact:typed-lure"],
+    body: "IKB阶段效果与知识检索效果需要通过跨域运行指标汇总。",
+    questionsAnswered: ["如何跟踪跨域运行指标？"],
+    admissionReason: "该事实卡只用于跨域运行指标跟踪。",
+    applicability: "跟踪跨域运行指标时。",
+    boundary: "不用于技术文档写作。",
+    confidence: "high",
+    confidenceBasis: ["人工确认"],
+    temporalState: "current",
+    verification: "source_confirmed",
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-document-typed-legacy",
+    taskType: "document",
+    title: "IKB阶段效果文档",
+    goal: "说明知识检索效果",
+    acceptance: "事实和结论分开",
+    scope: "work",
+  });
+
+  assert.equal(context.retrieval.anchorApplied, true);
+  assert.equal(context.results.some((item) => item.id === documentCard.id), true);
+  assert.equal(context.results.some((item) => item.id === typedLure.id), false);
+});
+
+test("document title does not fallback to a typed entity-matched card without document intent", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-document-typed-fallback-test-"));
+  captureKnowledge(home, {
+    title: "跨域运行事实卡",
+    scope: "work",
+    sourceKind: "manual",
+    sourceRefs: ["src-demo:typed-fallback"],
+    qualityVersion: 4,
+    productType: "fact_card",
+    compilationRef: "artifact:typed-fallback",
+    factRefs: ["fact:typed-fallback"],
+    body: "IKB阶段效果与知识检索效果需要通过跨域运行指标汇总。",
+    questionsAnswered: ["如何跟踪跨域运行指标？"],
+    admissionReason: "该事实卡只用于跨域运行指标跟踪。",
+    applicability: "跟踪跨域运行指标时。",
+    boundary: "不用于技术文档写作。",
+    confidence: "high",
+    confidenceBasis: ["人工确认"],
+    temporalState: "current",
+    verification: "source_confirmed",
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-document-typed-fallback",
+    taskType: "document",
+    title: "IKB阶段效果文档",
+    goal: "说明知识检索效果",
+    acceptance: "事实和结论分开",
+    scope: "work",
+  });
+
+  assert.equal(context.retrieval.anchorApplied, false);
+  assert.deepEqual(context.results, []);
+  assert.deepEqual(context.units, []);
+});
+
+test("context pack does not reenter a typed snippet-only card after a non-document title anchor", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-typed-legacy-snippet-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB父卡强锚点契约",
+    scope: "work",
+    body: "IKB父卡强锚点契约要求先固定父卡，再选择直接回答问题的单元。",
+    useWhen: "修改 IKB 父卡强锚点时。",
+    questionsAnswered: ["IKB父卡强锚点如何限制候选？"],
+  });
+  const typedLure = captureKnowledge(home, {
+    title: "跨域运行指标事实卡",
+    scope: "work",
+    sourceKind: "manual",
+    sourceRefs: ["src-demo:typed-legacy-snippet"],
+    qualityVersion: 4,
+    productType: "fact_card",
+    compilationRef: "artifact:typed-legacy-snippet",
+    factRefs: ["fact:typed-legacy-snippet"],
+    body: "IKB 跨域运行指标需要单独汇总。",
+    questionsAnswered: ["如何汇总跨域运行指标？"],
+    admissionReason: "该事实卡只用于跨域运行指标汇总。",
+    applicability: "汇总跨域运行指标时。",
+    boundary: "不用于 IKB 父卡强锚点选择。",
+    confidence: "high",
+    confidenceBasis: ["人工确认"],
+    temporalState: "current",
+    verification: "source_confirmed",
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-typed-legacy-snippet",
+    taskType: "coding",
+    title: "IKB父卡强锚点",
+    goal: "选择问题单元",
+    acceptance: "输出跨域运行指标",
+    scope: "work",
+  });
+
+  assert.equal(context.retrieval.anchorApplied, true);
+  assert.equal(context.results.some((item) => item.id === target.id), true);
+  assert.equal(context.results.some((item) => item.id === typedLure.id), false);
+});
+
+test("context pack retains the parent card with the matching Pi/Magent entity", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-pi-magent-entity-anchor-test-"));
+  const target = captureKnowledge(home, {
+    title: "Pi/Magent 调度关系图",
+    scope: "work",
+    body: "Pi/Magent 调度关系图先固定调用边界，再核对入口。",
+    useWhen: "梳理 Pi/Magent 调度关系时。",
+    questionsAnswered: ["Pi/Magent 调度关系图如何确定？"],
+  });
+  captureKnowledge(home, {
+    title: "Token 预算代码架构图",
+    scope: "work",
+    body: "代码架构图用于 Token 预算模型。",
+    useWhen: "生成代码架构图时。",
+    questionsAnswered: ["如何生成代码架构图？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-pi-magent-entity-anchor",
+    title: "Pi/Magent 调度关系图",
+    goal: "梳理 Pi/Magent 的调用关系",
+    acceptance: "输出调用边界",
+    scope: "work",
+  });
+
+  assert.equal(context.results.some((item) => item.id === target.id), true);
+});
+
+test("context pack emits direct facts but not root or structural sections by default", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-structural-unit-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB 精确召回二阶段合同",
+    scope: "work",
+    productType: "decision_card",
+    body: [
+      "# IKB 精确召回二阶段合同（decision_card）",
+      "",
+      "根标题说明 IKB 精确召回二阶段合同。",
+      "",
+      "## 使用定位",
+      "",
+      "IKB 精确召回二阶段合同的使用定位。",
+      "",
+      "## state",
+      "",
+      "IKB 精确召回二阶段合同的 state。",
+      "",
+      "## options",
+      "",
+      "IKB 精确召回二阶段合同的 options。",
+      "",
+      "## 直接可用事实",
+      "",
+      "| Fact | 时间状态 | 重要性 | 事实 | Evidence |",
+      "| --- | --- | --- | --- | --- |",
+      "| precise-retrieval-f1 | current | core | IKB 精确召回二阶段合同只返回直接可回答的事实。 | precise-e1 |",
+    ].join("\n"),
+    useWhen: "实施 IKB 精确召回二阶段合同时。",
+    questionsAnswered: ["IKB 精确召回二阶段合同保留什么事实？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-structural-unit-filter",
+    title: "IKB 精确召回二阶段合同",
+    goal: "只加载直接可回答的事实",
+    acceptance: "结构章节不进入 Context Pack",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.units.some((unit) => unit.unitId.includes("precise-retrieval-f1") && unit.kind === "fact"), true);
+  assert.equal(context.units.some((unit) => ["IKB 精确召回二阶段合同", "IKB 精确召回二阶段合同（decision_card）", "使用定位", "state", "options"].includes(unit.label)), false);
+});
+
+test("context pack excludes a root product-suffix section while retaining its direct fact", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-root-product-suffix-test-"));
+  const title = "IKB 根标题后缀泄漏合同";
+  const target = captureKnowledge(home, {
+    title,
+    scope: "work",
+    productType: "decision_card",
+    body: [
+      `# ${title}（decision_card）`,
+      "",
+      "root-suffix-leak-signal 是根标题段唯一可回答的内容。",
+      "",
+      "## 直接可用事实",
+      "",
+      "| Fact | 时间状态 | 重要性 | 事实 | Evidence |",
+      "| --- | --- | --- | --- | --- |",
+      "| root-direct-f1 | current | core | direct-fact-preserved-signal 是必须保留的直接事实。 | root-e1 |",
+    ].join("\n"),
+    useWhen: `实施 ${title} 时。`,
+    questionsAnswered: [`${title} 应保留哪些直接事实？`],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-root-product-suffix",
+    taskType: "coding",
+    title,
+    goal: "root-suffix-leak-signal；direct-fact-preserved-signal",
+    acceptance: "仅输出直接可回答事实",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.units.some((unit) => unit.label === `${title}（decision_card）`), false);
+  assert.equal(context.units.some((unit) => unit.unitId.includes("root-direct-f1") && unit.kind === "fact"), true);
+});
+
+test("context pack does not select a section that matches acceptance only", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-acceptance-only-unit-test-"));
+  const title = "IKB 目标问题隔离合同";
+  const target = captureKnowledge(home, {
+    title,
+    scope: "work",
+    body: [
+      `# ${title}`,
+      "",
+      "该卡只保留任务标题和目标直接回答。",
+      "",
+      "## 直接可用事实",
+      "",
+      "| Fact | 时间状态 | 重要性 | 事实 | Evidence |",
+      "| --- | --- | --- | --- | --- |",
+      "| goal-direct-f1 | current | core | goal-direct-fact-signal 是任务目标的直接事实。 | goal-e1 |",
+      "",
+      "## acceptance-only-section",
+      "",
+      "acceptance-only-signal 只出现在 acceptance 条件，不回答标题或目标。",
+    ].join("\n"),
+    useWhen: `实施 ${title} 时。`,
+    questionsAnswered: [`${title} 应保留什么目标事实？`],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-acceptance-only-unit",
+    taskType: "coding",
+    title,
+    goal: "goal-direct-fact-signal",
+    acceptance: "验证 acceptance-only-signal",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.units.some((unit) => unit.unitId.includes("goal-direct-f1") && unit.kind === "fact"), true);
+  assert.equal(context.units.some((unit) => unit.label === "acceptance-only-section"), false);
+});
+
+function captureEligiblePersonObservation(home: string) {
+  return captureKnowledge(home, {
+    title: "王嘉涛：Agent工具评估顺序（观察）",
+    scope: "work",
+    collection: "people",
+    body: "评估 IKB Agent 工具时，先验证可用性，再检查复用路径。",
+    sourceRefs: ["src-person-episode-1", "src-person-episode-2", "src-person-episode-3"],
+    qualityVersion: 4,
+    productType: "person_observation",
+    canonicalKey: "work:people:wangjiatao:observation:test",
+    compilationRef: "artifact-person-compilation",
+    factRefs: ["fact-person-pattern", "fact-person-episode-1", "fact-person-episode-2", "fact-person-episode-3"],
+    questionsAnswered: ["评估 Agent 工具时先检查什么？"],
+    admissionReason: "两个独立 Episode 支持一条窄范围协作观察。",
+    applicability: "准备与王嘉涛讨论 Agent 工具评估时。",
+    boundary: "只描述可观察的工作顺序，不推断人格、能力或决策权。",
+    useWhen: "准备 Agent 工具方案沟通时。",
+    useInputs: ["工具能力", "复用路径"],
+    useOutputs: ["沟通检查清单"],
+    useSteps: ["先验证可用性", "再检查复用"],
+    useChecks: ["不把观察写成正式决定"],
+    useStopConditions: ["身份或当前意图不明确"],
+    confidence: "medium",
+    confidenceBasis: ["三个独立 Episode"],
+    temporalState: "current",
+    verification: "source_confirmed",
+    identityConfidence: "high",
+    patternConfidence: "medium",
+    independentEpisodeCount: 3,
+    independentSourceCount: 3,
+    distinctDateCount: 3,
+    counterevidenceRefs: [],
+    counterevidenceSearch: "检查同一时间窗内的直接表达，未发现反例。",
+    doNotUseFor: ["推断人格、动机、能力等级、绩效、晋升或组织权力"],
+  });
+}
+
+test("search excludes people Knowledge unless the query has explicit person intent", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-search-people-routing-test-"));
+  const person = captureEligiblePersonObservation(home);
+  const system = captureKnowledge(home, {
+    title: "IKB检索效果评估",
+    scope: "work",
+    collection: "syntheses",
+    body: "评估检索命中、实际使用和任务结果。",
+  });
+
+  assert.deepEqual(searchKnowledge(home, "IKB Agent 工具评估", { scope: "work" }).map((item) => item.id), [system.id]);
+  assert.deepEqual(new Set(searchKnowledge(home, "王嘉涛 IKB Agent 工具评估", { scope: "work" }).map((item) => item.id)), new Set([person.id, system.id]));
+});
+
+test("context pack excludes people Knowledge from non-person tasks", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-people-routing-test-"));
+  const person = captureEligiblePersonObservation(home);
+  const system = captureKnowledge(home, {
+    title: "IKB检索回归与效果评估",
+    scope: "work",
+    collection: "syntheses",
+    body: "用固定 Case 验证召回相关性、实际使用和最终效果。",
+    useWhen: "修复 IKB 非人物任务的检索误召回时。",
+    questionsAnswered: ["如何建立 IKB 检索回归？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-system-retrieval",
+    taskType: "coding",
+    title: "修复 IKB Agent 非人物任务的检索误召回",
+    goal: "建立检索回归并验证最终消费者",
+    acceptance: "不召回人物卡",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [system.id]);
+  assert.equal(context.results.some((item) => item.id === person.id), false);
+  assert.deepEqual(context.retrieval.excludedByRoutingIds, [person.id]);
+});
+
+test("context pack allows people Knowledge for communication tasks or an explicit identity", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-people-intent-test-"));
+  const person = captureEligiblePersonObservation(home);
+
+  const communication = buildContextPack(home, {
+    taskId: "task-communication",
+    taskType: "communication",
+    title: "Agent工具方案沟通",
+    goal: "准备沟通材料",
+    acceptance: "表达清楚",
+    scope: "work",
+  });
+  const explicitIdentity = buildContextPack(home, {
+    taskId: "task-explicit-person",
+    taskType: "general",
+    title: "王嘉涛 Agent工具评估顺序",
+    goal: "核对可观察的协作方式",
+    acceptance: "不推断人格",
+    scope: "work",
+  });
+
+  assert.deepEqual(communication.results.map((item) => item.id), [person.id]);
+  assert.deepEqual(explicitIdentity.results.map((item) => item.id), [person.id]);
+});
+
+test("context pack does not fill results from body-only weak matches", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-answerability-test-"));
+  captureKnowledge(home, {
+    title: "资金安全评审",
+    scope: "work",
+    collection: "playbooks",
+    body: "IKB 检索路由 回归 效果 评估。这里只是正文中的旁路提及，不回答检索问题。",
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-answerability",
+    taskType: "coding",
+    title: "IKB检索路由回归",
+    goal: "修复弱相关填充",
+    acceptance: "没有可回答知识时返回空",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results, []);
+});
+
+test("context pack does not backfill weak two-character units after selecting a direct answer", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-weak-unit-backfill-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB专属召回契约",
+    scope: "work",
+    body: [
+      "# 直接回答",
+      "",
+      "IKB专属召回契约要求只返回能回答任务的问题级单元。",
+      "",
+      "# 旁路一",
+      "",
+      "召回。",
+      "",
+      "# 旁路二",
+      "",
+      "召回。",
+    ].join("\n"),
+    useWhen: "处理 IKB专属召回契约时。",
+    questionsAnswered: ["IKB专属召回契约如何限制任务单元？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-weak-unit-backfill",
+    title: "IKB专属召回契约",
+    goal: "只返回直接回答的问题级单元",
+    acceptance: "不使用旁路召回填满结果",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.units.some((unit) => unit.label === "旁路一" || unit.label === "旁路二"), false);
+  assert.equal(context.units.length, 1);
+});
+
+test("context pack rejects cross-domain cards that share only generic recall wording", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-cross-domain-generic-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB专属召回契约",
+    scope: "work",
+    body: "# 直接回答\n\nIKB专属召回契约要求任务只接收直接回答的问题级单元。",
+    useWhen: "处理 IKB专属召回契约时。",
+    questionsAnswered: ["IKB专属召回契约如何限制任务单元？"],
+  });
+  const openViking = captureKnowledge(home, {
+    title: "OpenViking召回改造手册",
+    scope: "work",
+    body: "# 旁路\n\n召回。",
+    useWhen: "进行召回改造时。",
+    questionsAnswered: ["如何进行召回改造？"],
+  });
+  const booking = captureKnowledge(home, {
+    title: "机票预订召回改造说明",
+    scope: "work",
+    body: "# 旁路\n\n召回。",
+    useWhen: "进行召回改造时。",
+    questionsAnswered: ["如何进行召回改造？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-cross-domain-generic",
+    title: "IKB具体问题到知识单元召回改造",
+    goal: "只返回直接回答的问题级单元",
+    acceptance: "泛词跨域卡不进入结果",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.units.some((unit) => unit.knowledgeId === openViking.id || unit.knowledgeId === booking.id), false);
+});
+
+test("context pack keeps multiple title-anchor dimensions when broad contract text overweights one card", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-multi-anchor-test-"));
+  const review = captureKnowledge(home, {
+    title: "技术方案与架构评审执行卡",
+    scope: "work",
+    body: "评审一份涉及预订领域模型与编排边界的技术方案识别事实失真跨层依赖未闭合风险和验证缺口不执行外部评论优先返回技术方案与架构评审执行卡预订领域模型事实包人物观察只能在明确适用范围内形成评审检查清单",
+  });
+  const domain = captureKnowledge(home, {
+    title: "机票预订系统现状与目标模型",
+    scope: "work",
+    body: "预订领域模型区分事实与编排。",
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-multi-anchor",
+    title: "机票预订架构评审",
+    goal: "评审一份涉及预订领域模型与编排边界的技术方案，识别事实失真、跨层依赖、未闭合风险和验证缺口，不执行外部评论",
+    acceptance: "优先返回技术方案与架构评审执行卡、预订领域模型事实包；人物观察只能在明确适用范围内；形成评审检查清单",
+    scope: "work",
+  });
+  assert.deepEqual(new Set(context.results.map((item) => item.id)), new Set([review.id, domain.id]));
+  assert.equal(context.retrieval.anchorMatches, 2);
+});
+
+test("context pack does not let one high-scoring Chinese title suppress a second explicit title-anchor match", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-chinese-anchor-skew-test-"));
+  const reporting = captureKnowledge(home, {
+    title: "技术项目向上汇报的业务结果与机制表达",
+    scope: "work",
+    body: "技术项目向上汇报要连接业务结果、投入成本和长期机制。",
+    useWhen: "本人准备技术项目复盘、阶段价值说明或向上汇报时。",
+    questionsAnswered: ["技术项目向上汇报应包含什么"],
+  });
+  const milestone = captureKnowledge(home, {
+    title: "项目推进的里程碑同步契约",
+    scope: "work",
+    body: "持续项目需要同步当前状态、下一里程碑、负责人和阻塞。",
+    useWhen: "持续项目做周报、阶段同步、资源升级或跨人交接时。",
+    questionsAnswered: ["项目推进同步需要包含哪些信息"],
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-upward-report",
+    title: "技术项目向上汇报与里程碑同步",
+    goal: "说明当前结果、未闭合风险、投入成本、后续机制和需要上级决定的事项",
+    acceptance: "同时返回向上汇报和里程碑同步知识",
+    scope: "work",
+  });
+  assert.deepEqual(new Set(context.results.map((item) => item.id)), new Set([reporting.id, milestone.id]));
+  assert.equal(context.retrieval.anchorMatches, 2);
+});
+
+test("context pack applies a visible body budget without losing the full-card path", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-budget-test-"));
+  const record = captureKnowledge(home, {
+    title: "恢复事务完整手册",
+    scope: "personal",
+    body: ["# 结论", "恢复事务必须保留快照。", ...Array.from({ length: 30 }, (_, index) => `## 章节 ${index}\n\n${"恢复 冲突 快照 验证 ".repeat(120)}`)].join("\n\n"),
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-budget",
+    title: "恢复事务",
+    goal: "检查冲突快照",
+    acceptance: "验证恢复",
+    scope: "personal",
+    bodyBudgetChars: 3_000,
+  });
+  assert.deepEqual(context.retrieval.truncatedIds, []);
+  assert.deepEqual(context.retrieval.truncatedUnitIds, []);
+  assert.deepEqual(context.results.map((item) => item.id), [record.id]);
+  assert.equal(context.units.length, 2, "title 与 goal 两类任务问题各保留一个最佳单元");
+  assert.match(context.markdown, /query-focused excerpt/);
+  assert.match(context.markdown, new RegExp(record.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.ok(context.markdown.length <= 12_000);
+});
+
+test("context pack keeps the total body budget when a caller requests an excessive result limit", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-budget-many-test-"));
+  for (let index = 0; index < 20; index += 1) {
+    captureKnowledge(home, {
+      title: `恢复事务手册 ${index}`,
+      scope: "personal",
+      body: `# 恢复事务\n\n${"恢复 冲突 快照 验证 ".repeat(500)}`,
+    });
+  }
+  const context = buildContextPack(home, {
+    taskId: "task-budget-many",
+    title: "恢复事务",
+    goal: "验证恢复冲突快照",
+    acceptance: "全部结果受总预算约束",
+    scope: "personal",
+    limit: 100,
+    bodyBudgetChars: 2_000,
+  });
+  assert.equal(context.results.length, 2);
+  assert.equal(context.retrieval.truncatedIds.length, 2);
+  assert.ok(context.markdown.length < 8_000);
+});
+
+test("context pack retrieves concrete Knowledge units instead of a whole weakly matched card", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-unit-retrieval-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB知识单元召回契约",
+    scope: "work",
+    collection: "syntheses",
+    body: [
+      "# IKB知识单元召回契约",
+      "",
+      "## 直接可用事实",
+      "",
+      "| Fact | 时间状态 | 重要性 | 事实 | Evidence |",
+      "| --- | --- | --- | --- | --- |",
+      "| ikb-retrieval-f1 | current | core | Context Pack 应按具体问题只召回命中的事实单元。 | ikb-e1 |",
+      "| ikb-storage-f2 | current | supporting | 历史运行目录需要按内容哈希压缩。 | ikb-e2 |",
+      "",
+      "## 有依据的结论",
+      "",
+      "### 召回粒度必须落到知识单元",
+      "",
+      "- 主张：`ikb-retrieval-c1`",
+      "- 事实引用：`ikb-retrieval-f1`",
+      "- 推导：整卡召回会把无关事实带入任务上下文。",
+    ].join("\n"),
+    useWhen: "修改 IKB 检索、召回和 Context Pack 时。",
+    questionsAnswered: ["IKB 如何按具体问题召回知识单元？"],
+    useStopConditions: ["没有直接回答任务问题的单元时返回零结果"],
+  });
+  const noise = captureKnowledge(home, {
+    title: "机票预订系统目标模型",
+    scope: "work",
+    collection: "domains",
+    body: "分单、多程、价格追溯和链路复用是预订系统的具体问题。",
+    questionsAnswered: ["预订系统当前有哪些具体问题？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-unit-retrieval",
+    taskType: "coding",
+    title: "IKB具体问题到知识单元召回改造",
+    goal: "按任务问题召回具体 Fact 与 Claim",
+    acceptance: "弱相关领域卡不填充；只返回能回答问题的知识单元",
+    scope: "work",
+  });
+
+  assert.deepEqual(context.results.map((item) => item.id), [target.id]);
+  assert.equal(context.results.some((item) => item.id === noise.id), false);
+  assert.equal(context.units.some((unit) => unit.unitId.includes("ikb-retrieval-f1") && unit.kind === "fact"), true);
+  assert.equal(context.units.some((unit) => unit.unitId.includes("ikb-storage-f2")), false);
+  assert.match(context.markdown, /Context Pack 应按具体问题只召回命中的事实单元/);
+  assert.doesNotMatch(context.markdown, /历史运行目录需要按内容哈希压缩/);
+  assert.doesNotMatch(context.markdown, /机票预订系统目标模型/);
+});
+
+test("context pack routes an ASCII-CJK glued IKB title to its relevant contract before generic candidates", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-glued-title-routing-test-"));
+  const target = captureKnowledge(home, {
+    title: "IKB Context Pack knowledge-unit retrieval contract",
+    scope: "work",
+    collection: "syntheses",
+    body: "Context Pack routes an IKB task to a knowledge unit that answers it.",
+    useWhen: "Evolve IKB Context Pack knowledge-unit retrieval.",
+    questionsAnswered: ["How should IKB Context Pack retrieve a knowledge unit?"],
+  });
+  const openVikingNoise = captureKnowledge(home, {
+    title: "OpenViking 通用检索运行手册",
+    scope: "work",
+    collection: "domains",
+    body: "任务、问题、召回、改造和验证是检索系统的通用术语。",
+    questionsAnswered: ["检索系统如何验证通用任务？"],
+  });
+  const bookingNoise = captureKnowledge(home, {
+    title: "机票预订召回链路说明",
+    scope: "work",
+    collection: "domains",
+    body: "任务、问题、召回、改造和验证是预订链路的通用术语。",
+    questionsAnswered: ["预订召回链路有哪些问题？"],
+  });
+
+  const context = buildContextPack(home, {
+    taskId: "task-glued-title-routing",
+    taskType: "coding",
+    title: "IKB具体问题到知识单元召回改造",
+    goal: "按具体问题返回可用知识单元",
+    acceptance: "相关契约被召回，通用卡不进入上下文",
+    scope: "work",
+  });
+
+  assert.equal(context.results.some((item) => item.id === target.id), true);
+  assert.equal(context.results.some((item) => item.id === openVikingNoise.id), false);
+  assert.equal(context.results.some((item) => item.id === bookingNoise.id), false);
+});
+
+test("context pack decomposes explicit title dimensions and keeps card-level results unique", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-unit-multi-question-test-"));
+  const record = captureKnowledge(home, {
+    title: "技术项目向上汇报与里程碑同步契约",
+    scope: "work",
+    body: "# 项目同步\n\n## 结果表达\n\n向上汇报说明业务结果和投入。\n\n## 里程碑\n\n里程碑同步说明状态、负责人和阻塞。",
+    questionsAnswered: ["技术项目向上汇报包含什么？", "里程碑同步包含什么？"],
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-unit-multi-question",
+    title: "技术项目向上汇报与里程碑同步",
+    goal: "准备项目同步材料",
+    acceptance: "两个维度都要有具体知识",
+    scope: "work",
+  });
+
+  assert.equal(context.questions.includes("技术项目向上汇报"), true);
+  assert.equal(context.questions.includes("里程碑同步"), true);
+  assert.deepEqual(context.results.map((item) => item.id), [record.id]);
+  assert.equal(new Set(context.units.map((unit) => unit.knowledgeId)).size, 1);
+  assert.equal(context.units.some((unit) => unit.text.includes("业务结果和投入")), true);
+  assert.equal(context.units.some((unit) => unit.text.includes("状态、负责人和阻塞")), true);
+});
+
+test("context pack enforces a hard total budget across unit metadata and content", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-context-unit-total-budget-test-"));
+  const longFact = "恢复事务必须保留冲突快照和验证证据。".repeat(600);
+  captureKnowledge(home, {
+    title: "恢复事务事实包",
+    scope: "personal",
+    body: [
+      "# 恢复事务事实包",
+      "",
+      "## 直接可用事实",
+      "",
+      "| Fact | 时间状态 | 重要性 | 事实 | Evidence |",
+      "| --- | --- | --- | --- | --- |",
+      `| recovery-f1 | current | core | ${longFact} | recovery-e1 |`,
+    ].join("\n"),
+    questionsAnswered: ["恢复事务如何保留冲突快照？"],
+  });
+  const context = buildContextPack(home, {
+    taskId: "task-unit-total-budget",
+    title: "恢复事务冲突快照",
+    goal: "读取恢复事实",
+    acceptance: "Context Pack 总长度受限",
+    scope: "personal",
+    totalBudgetChars: 3_000,
+  });
+
+  assert.ok(context.markdown.length <= 3_000, `actual length: ${context.markdown.length}`);
+  assert.equal(context.retrieval.totalBudgetChars, 3_000);
+  assert.equal(context.retrieval.truncatedUnitIds.length > 0, true);
 });
 
 test("quality version 3 requires a task-facing use contract", () => {
@@ -305,6 +1475,119 @@ test("quality version 4 uses type-specific contracts instead of forcing facts in
     }),
     /use_when_missing.*use_steps_missing/s,
   );
+});
+
+test("quality version 5 binds the final Knowledge view to one loss-audited compilation product", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-v5-loss-contract-test-"));
+  assert.throws(
+    () => captureKnowledge(home, {
+      title: "缺少低损耗绑定的知识",
+      type: "fact",
+      collection: "domains",
+      body: "只有正文，没有来源清单、产品身份和信息损耗报告。",
+      scope: "work",
+      sourceKind: "document",
+      sourceRefs: ["src:pricing"],
+      qualityVersion: 5,
+      productType: "domain_pack",
+      compilationRef: "artifact-result",
+      factRefs: ["f-object"],
+      questionsAnswered: ["报价领域有哪些核心对象？"],
+      admissionReason: "保留可复用领域事实。",
+      applicability: "报价方案设计。",
+      boundary: "不证明当前生产实现。",
+      confidenceBasis: ["正式来源"],
+    }),
+    /canonical_key_missing.*compilation_schema_missing.*compilation_case_id_missing.*compilation_product_id_missing.*extraction_manifest_ref_missing.*information_loss_ref_missing/s,
+  );
+
+  const created = captureKnowledge(home, {
+    title: "报价领域低损耗事实包",
+    type: "fact",
+    collection: "domains",
+    body: "保留报价请求、报价方案、乘机人供给及其关系。",
+    scope: "work",
+    sourceKind: "document",
+    sourceRefs: ["src:pricing"],
+    qualityVersion: 5,
+    productType: "domain_pack",
+    canonicalKey: "work:pricing:domain_pack:target-model",
+    compilationSchema: "ikb-knowledge-compilation-result.v3",
+    compilationCaseId: "pricing-domain-01",
+    compilationProductId: "p-domain",
+    extractionManifestRef: "artifact-manifest",
+    compilationRef: "artifact-result",
+    informationLossRef: "artifact-fidelity",
+    factRefs: ["f-object"],
+    questionsAnswered: ["报价领域有哪些核心对象？"],
+    admissionReason: "保留可复用领域事实。",
+    applicability: "报价方案设计。",
+    boundary: "不证明当前生产实现。",
+    confidenceBasis: ["正式来源"],
+  });
+  const reloaded = listKnowledge(home, "work").find((record) => record.id === created.id);
+  assert.ok(reloaded);
+  assert.equal(reloaded.canonicalKey, "work:pricing:domain_pack:target-model");
+  assert.equal(reloaded.compilationSchema, "ikb-knowledge-compilation-result.v3");
+  assert.equal(reloaded.compilationCaseId, "pricing-domain-01");
+  assert.equal(reloaded.compilationProductId, "p-domain");
+  assert.equal(reloaded.extractionManifestRef, "artifact-manifest");
+  assert.equal(reloaded.informationLossRef, "artifact-fidelity");
+});
+
+test("quality version 5 rejects duplicate active canonical keys and lint catches manual collisions", () => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-v5-canonical-collision-test-"));
+  const base = {
+    type: "fact",
+    collection: "domains",
+    body: "完整类型化知识正文。",
+    scope: "work",
+    sourceKind: "document",
+    sourceRefs: ["src:pricing"],
+    qualityVersion: 5,
+    productType: "domain_pack",
+    compilationSchema: "ikb-knowledge-compilation-result.v3",
+    compilationCaseId: "pricing-domain-01",
+    extractionManifestRef: "artifact-manifest",
+    compilationRef: "artifact-result",
+    informationLossRef: "artifact-fidelity",
+    factRefs: ["f-object"],
+    questionsAnswered: ["报价领域有哪些核心对象？"],
+    admissionReason: "保留可复用领域事实。",
+    applicability: "报价方案设计。",
+    boundary: "不证明当前生产实现。",
+    confidenceBasis: ["正式来源"],
+  } as const;
+  const first = captureKnowledge(home, {
+    ...base,
+    title: "报价领域主事实包",
+    canonicalKey: "work:pricing:domain_pack:target-model",
+    compilationProductId: "p-domain",
+  });
+  assert.throws(
+    () => captureKnowledge(home, {
+      ...base,
+      title: "重复报价领域事实包",
+      canonicalKey: first.canonicalKey,
+      compilationProductId: "p-domain-copy",
+    }),
+    /active canonical_key already belongs to/i,
+  );
+
+  const second = captureKnowledge(home, {
+    ...base,
+    title: "另一份领域事实包",
+    canonicalKey: "work:pricing:domain_pack:another-boundary",
+    compilationProductId: "p-domain-2",
+  });
+  const text = readFileSync(second.path, "utf8").replace(
+    /canonical_key: .*$/m,
+    `canonical_key: ${JSON.stringify(first.canonicalKey)}`,
+  );
+  writeFileSync(second.path, text, { mode: 0o600 });
+  const inspection = inspectKnowledgeLayout(home, "work");
+  assert.equal(inspection.ok, false);
+  assert.equal(inspection.qualityIssues.filter((issue) => issue.code === "active_canonical_key_duplicate").length, 2);
 });
 
 test("quality version 4 evidence and safety metadata survive capture and reload", () => {

@@ -1,10 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ELEPHANT_READ_ONLY_OPERATION, ingestCitadelDocument, ingestElephantHistory } from "../src/external.ts";
 import { listSources, readSourceRecords } from "../src/source.ts";
+
+test("external intake can run a Node-backed CLI from a minimal scheduler PATH", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "ikb-external-runtime-home-"));
+  const commandDir = mkdtempSync(join(tmpdir(), "ikb-external-runtime-command-"));
+  const emptyPath = mkdtempSync(join(tmpdir(), "ikb-external-runtime-path-"));
+  const command = join(commandDir, "synthetic-citadel.js");
+  const previousPath = process.env.PATH;
+  t.after(() => {
+    process.env.PATH = previousPath;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(commandDir, { recursive: true, force: true });
+    rmSync(emptyPath, { recursive: true, force: true });
+  });
+  writeFileSync(command, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes("getSimpleMarkdown")) console.log(JSON.stringify({ contentId: "123", title: "Scheduler KM", content: "# Scheduler KM\\n\\nEvidence." }));
+else if (args.includes("getDocumentMetaInfo")) console.log(JSON.stringify({ contentId: "123", title: "Scheduler KM", creator: "author" }));
+else throw new Error("unexpected command: " + args.join(" "));
+`);
+  chmodSync(command, 0o700);
+  process.env.PATH = emptyPath;
+
+  const result = ingestCitadelDocument(home, "123", { command, includeComments: false });
+
+  assert.equal(result.title, "Scheduler KM");
+  assert.equal(result.document.imported, true);
+});
 
 test("Citadel intake preserves document metadata, discussion comments and replies", () => {
   const home = mkdtempSync(join(tmpdir(), "ikb-citadel-home-"));

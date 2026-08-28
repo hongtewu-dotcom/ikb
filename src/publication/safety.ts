@@ -46,6 +46,9 @@ export function inspectPublicationEligibility(record: KnowledgeRecord): Publicat
   return issues;
 }
 
-export function inspectPublicText(text: string): PublicationGateIssue[] {
-  return SENSITIVE_PATTERNS.flatMap(({ code, pattern, detail }) => pattern.test(text) ? [{ code, detail }] : []);
+export function inspectPublicText(text: string, generatedPublicIds: string[] = []): PublicationGateIssue[] {
+  const inspectable = [...new Set(generatedPublicIds)]
+    .filter((id) => /^pub-[a-f0-9]{16}$/.test(id))
+    .reduce((current, id) => current.replaceAll(id, "pub-generated-id"), text);
+  return SENSITIVE_PATTERNS.flatMap(({ code, pattern, detail }) => pattern.test(inspectable) ? [{ code, detail }] : []);
 }

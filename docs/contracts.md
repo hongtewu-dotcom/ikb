@@ -1,5 +1,38 @@
 # ikb 执行与治理契约
 
+## 当前公开合同
+
+IKB 的公开合同只包含四个对象和三个 Agent 意图：
+
+| 对象 | 单一职责 |
+|---|---|
+| Source | 保存原始材料、来源、版本和定位 |
+| Knowledge | 保存未来任务可直接复用的当前结论 |
+| Inbox | 保存仍需整理、更新或人工确认的事项；文件存在即待处理 |
+| Receipt | 用 `ikb-receipt.v1` 的 `kind + operations[]` 记录一次命令或维护 |
+
+Knowledge 状态只有 `draft / verified / retired`。`helpful / partial / incorrect / unused` 是 feedback，`source_confirmed / task_validated / user_confirmed` 是 Receipt 中的验证或确认事实，`pending_review` 是 Inbox 或旧兼容对象的内部字段，三者都不扩充 Knowledge 状态机。
+
+```text
+ikb remember <path|url|text> --scope <scope>
+ikb use --goal <goal> --accept <acceptance> --scope <scope>
+ikb feedback <usage-id> --outcome helpful|partial|incorrect|unused [--result <path>]
+```
+
+一次公开命令或一次维护最多写一份 Receipt。`new / update / retire` 操作必须带 Source refs、before/after hash、适用边界和校验结果；Principle 的精确正文与人工确认事实必须进入同一份 Receipt。默认召回只消费 verified；incorrect 让实际使用过的 Knowledge 回到 draft 并生成 Inbox 项。
+
+### 人工确认的最终消费者合同
+
+只要 IKB 要求人确认 Knowledge、Principle 或 Candidate，主输出必须先生成一份 `ikb-human-confirmation-brief.v1` 单页稿。人只需要看这一份：先说明要决定什么，再展示 Agent 实际会执行的完整内容、触发条件、边界、退役信号，以及确认和驳回分别产生什么影响；结尾给出按 A/B/C 等稳定 item key 回复的格式。
+
+hash、Artifact、Source refs、proposal path 和内部 review package 只放单页末尾的机器审计附录，不能作为人工阅读入口。一次批量最多三个主题，也只能给一份单页稿；命令和 reasoning 输出必须把 `confirmationBrief.path` 或 `primaryHumanReviewPath` 作为唯一主跳链，原始 draft、guide、validation 和 per-item review 文件只保留 internal compatibility。
+
+用户确认只作用于明确点名的 item。执行端从已绑定的提议稿或 review package 取得内容，继续校验 scope、Artifact、hash、QV5 和当前字节；不得要求用户复制文件路径，也不得因改成人审单页而降低原有安全门禁。确认事实与精确内容 hash 进入 Receipt，未确认项保持原样。
+
+## 内部兼容合同
+
+以下 Task、Run、Candidate、Experience、QV5、Artifact、Ledger、Gate、Harness、发布和运维合同继续用于读取历史数据与支撑旧入口。它们不属于目标知识生命周期，也不出现在默认 HELP；新 facade 穿过真实 Agent 消费前不得删除。
+
 ## 契约先于实现
 
 系统能否长期运行，取决于每个环节是否说清输入、输出、副作用、证据和失败出口。Agent 可以更换模型，Skill 可以升级实现，控制面可以改界面，但这些契约不能随 prompt 漂移。
@@ -45,11 +78,21 @@ temporal_state: current
 verification: unverified
 ```
 
-`type` 表示知识语义，首批为 `fact / decision / preference / playbook / entity / goal`；`collection` 表示 Vault 中的人类浏览位置，首批为 `domains / projects / people / concepts / decisions / playbooks / lessons / syntheses`。二者正交：同一个 `fact` 可以按对象进入 `people`、`projects` 或 `concepts`。没有显式 collection 时 Core 只做保守映射，Curator 应主动选择。
+`type` 表示知识语义，正式类型包括 `fact / decision / preference / principle / playbook / entity / goal / lesson / synthesis / architecture`；`collection` 表示 Vault 中的人类浏览位置，包括 `domains / projects / people / concepts / decisions / principles / playbooks / lessons / syntheses`。二者正交：同一个 `fact` 可以按对象进入 `people`、`projects` 或 `concepts`；`principle` 未显式指定 collection 时固定进入 `principles`。其他类型没有显式 collection 时 Core 只做保守映射，Curator 应主动选择。
 
 `confidence` 表示证据强度，不是概率，也不等于 `status`：`low` 允许作为带边界的探索性 draft，`medium` 表示来源支持但仍需任务验证，`high` 表示多来源或强来源已相互印证。`confidence_basis` 必须说明为什么落在这个等级。`temporal_state` 描述内容是当前、规划、历史、混合、已被替代还是未知；`verification` 描述是否只完成来源确认、已被真实 Task 验证或得到用户确认。业务逻辑可以先以 medium/low draft 进入 Context 候选，人物归因默认要求 high identity confidence 与至少 medium pattern confidence；两者不能用一套阈值。
 
 `quality_version: 4` 是新的事实编译合同：Knowledge 必须写 `product_type`、`compilation_ref`、`fact_refs` 和 `questions_answered`。只有 `playbook` 强制要求 `use_steps/use_checks/use_stop_conditions`；事实、架构、实体、流程和决策分别使用自己的类型结构，不再为了通过门禁被改写成通用操作卡。
+
+`quality_version: 5` 是当前低损耗发布合同。除 QV4 字段外，还必须写 `canonical_key`、`compilation_schema=ikb-knowledge-compilation-result.v3`、`compilation_case_id`、`compilation_product_id`、`extraction_manifest_ref` 和 `information_loss_ref`。三个 ref 分别指向已登记并带 hash 的来源/问题清单、完整编译结果和信息损耗报告 Artifact；同一 `canonical_key` 只能有一个非 retired Knowledge。新评审包会重新读取 Source snapshot，重算保真报告，并把正文与 `extraction product-view` 的确定性输出逐字对账，所以“编译结果完整、落库只剩一句话”会被 Core 拒绝。
+
+`principle` 是 review-first 的完整 Knowledge 语义层，不是普通事实或一次性决策的别名。Principle draft 必须满足 QV5、`product_type=principle_card`、`source_refs` 和来源准入字段；`decision_card` 不能代理 Principle。它可以通过 create/list/show/lint 进入人工评审，但默认 search、Context Pack 和 eligibility 都不消费。首次激活必须穿过 Experience Candidate 的完整确认链：Candidate 当前内容 hash 与人工接受时一致，审查稿是登记过的不可变快照，Candidate 已 accepted 并 applied 到目标 Knowledge，而且待激活稿与被接受稿逐字一致。`knowledge verify` 对 Principle 只允许把这份已接受 draft 的 `status` 改为 `verified`。
+
+已激活 Principle 的后续人工修订可以使用 Receipt 确认链。Receipt 必须绑定点名的 Knowledge ID、用户确认时间与提议稿 hash；提议稿位于 IKB home 内且为普通文件，当前 Knowledge 的完整语义除 revision 元数据外与提议稿一致，after hash 也必须等于当前文件。Receipt 文件还要有 path 与 content hash 一致的 `receipt.written` Ledger 事件。旧 Candidate 引用存在时先校验旧链，只有 Candidate 本身有效但当前字节已发生后续修订，才允许回退 Receipt；Candidate 结构、hash 或应用状态错误时不能绕过。手工写入 `verification=user_confirmed`、直接创建 verified Principle 或事后修改正文仍不能进入默认检索。
+
+`AGENTS.md` 只是已确认 Principle 的最小 runtime 投影，不是第二份原则主库。`knowledge principle-projection-check --manifest <json>` 只读检查 Principle 是否仍为默认可检索状态、标记块是否缺失/重复/内容漂移，以及同一 Principle 在多个文件中的投影文本是否冲突；`--write` 只在 `governance/<scope>/principles/` 生成报告和建议块，永远不自动改写 `AGENTS.md`。文本一致性可由代码判断，语义取舍和实际 diff 仍由人确认。
+
+Source 直接提出的新 Principle 使用 `knowledge principle-request`：输入必须是同一 Run 已登记且哈希未变化的 QV5 manifest、compilation 和 fidelity Artifact，并明确选择一个 `operation=new` 的 `principle_card`。Core 会重算抽取校验与信息损耗，只生成 `pending_review` Candidate；该命令不写 Knowledge、不设置 `user_confirmed`，后续仍需完整稿、候选验证和编号确认说明组成的 Curator 审查包。
 
 个人 Knowledge 在此基础上增加独立的类型化准入。`scope=personal` 只是数据归属，不等于可信或可公开；`quality_version < 4` 的旧个人 draft 继续可读，但只能作为 advisory，不能直接晋升 `verified` 或进入公开发布。`quality_version >= 4` 的个人 Knowledge 必须同时通过通用质量检查和下表的个人准入检查：
 
@@ -96,7 +139,7 @@ origin:
 resolution: null
 ```
 
-候选状态是 `discovered → queued → ingested`，也可以回到 `discovered`（暂停排队）或进入 `rejected` / `blocked`。状态变更和每次新增来源/record 都追加候选快照与 `candidate.*` 账本事件。`discovered` 只表示找到了入口；手工 `candidate resolve` 仍要求先 `queued`，而用户授权的维护流程可以通过 `candidate resolve-all` 自动排队并读取当前 scope 下候选。学城读取采用滚动限频：任意 30 分钟最多 10 篇，文档间隔默认 2 秒，剩余候选留在池中；`--limit` 只限制本次最多处理数，`--limit 0` 也不能绕过 30 分钟窗口。每次实际发起读取前追加 `candidate.resolve_started` 事件，失败也计入窗口。当前首个外部候选适配器是学城：`source search-citadel` 保存搜索原始响应并可写入候选池，`candidate discover <source-id>` 从已导入 Source 的学城 URL/`contentId:` refs 中发现候选，`candidate resolve`/`candidate resolve-all` 再调用官方 `oa-skills citadel` 读取正文、元信息和评论。解析后的正文与评论分别进入 `document` / `review_comment` Source；权限或密级导致的读取失败进入 `blocked` 并记录原因，候选不会自动变成 verified Knowledge。所有学城动作均为只读，不创建、编辑、评论或发送消息。
+候选状态是 `discovered → queued → ingested`，也可以回到 `discovered`（暂停排队）或进入 `rejected` / `blocked`。状态变更和每次新增来源/record 都追加候选快照与 `candidate.*` 账本事件。`discovered` 只表示找到了入口；手工 `candidate resolve` 仍要求先 `queued`，而用户授权的维护流程可以通过 `candidate resolve-all` 自动排队并读取当前 scope 下候选。学城读取采用滚动限频：任意 30 分钟最多 10 篇，文档间隔默认 30 秒，剩余候选留在池中；`--limit` 只限制本次最多处理数，`--limit 0` 也不能绕过 30 分钟窗口。每次实际发起读取前追加 `candidate.resolve_started` 事件，失败也计入窗口。当前首个外部候选适配器是学城：`source search-citadel` 保存搜索原始响应并可写入候选池，`candidate discover <source-id>` 从已导入 Source 的学城 URL/`contentId:` refs 中发现候选，`candidate resolve`/`candidate resolve-all` 再调用官方 `oa-skills citadel` 读取正文、元信息和评论。解析后的正文与评论分别进入 `document` / `review_comment` Source；权限或密级导致的读取失败进入 `blocked` 并记录原因，候选不会自动变成 verified Knowledge。所有学城动作均为只读，不创建、编辑、评论或发送消息。
 
 ### Key Person Directory
 
@@ -107,7 +150,7 @@ resolution: null
 人物处理分为四层，不能把它们混成一次写入：
 
 1. **Source delta**：每次同步只追加不可变 Source 或增量 Source；不改人物页，不生成 Knowledge。
-2. **Evidence dossier**：在 intake 批次结束、每日计划或明确查询时，对受影响 scope 做一次确定性全量投影；重复执行得到同一组证据（生成时间和账本事件除外）。`context`/共现只能作为协作上下文，不能证明此人表达过观点。
+2. **Evidence dossier**：在 intake 批次结束、每日计划或明确查询时，对受影响 scope 做一次确定性全量投影；重复执行得到同一组证据（生成时间和账本事件除外）。可读的 `index.md` 可以按 limit 截断，但同次重建必须另写完整的 `episodes/<evidence-fingerprint>.json`，覆盖全部直接 Episode 的 Source/record 引用、归因、时间、哈希和有界摘录；同一 fingerprint 复用不可变文件，证据变化则新增版本，历史 Artifact 不得被覆盖。`context`/共现不进入该索引，也不能证明此人表达过观点。fingerprint 只由证据决定，不把重建时间算作变化。旧大象网页快照若把引用内容误作回复正文，人物投影必须从 immutable raw 恢复回复者本人内容并留下修复标签；无法确定则不得计入 direct Episode。
 3. **Person consolidation**：默认按周运行；出现至少 3 个新增 direct Episode、2 个独立新 Source、身份映射变更或用户明确要求时提前运行。它读取当前 dossier 和上一版 Artifact，输出 `added / unchanged / superseded / conflicted / unknown`，不静默覆盖历史。
 4. **Knowledge draft**：只有通过身份、独立 Episode、可行动性、时间有效性、推断边界和 Trace 六道门禁的原子结论，才由 Curator 写入 `people` collection 的 draft；没有满足条件时保留证据并输出空候选。verified 仍需要人工确认或真实任务验证。
 
@@ -199,7 +242,11 @@ Run 表示一次可重放的执行尝试，状态为 queued、running、awaiting
 
 当前已经由 Core 代码硬性拦截的包括：Source scope 校验、原文/records hash 和路径完整性、重复 Source 跳过、增量 Source 的稳定记录去重与 state 校验、来源型 Knowledge 落盘准入、普通正文的字面量换行转义、Knowledge `verified` 必须有 `source_refs`、跨 scope 关系默认阻断、Task/Run 状态机、Approval 等待期间不能成功、事件账本 hash 链和 `doctor` 检查。Harness 的 `harness-events.v1` 只允许引用/枚举/hash，拒绝 raw content/path/url；`harness-eval.v1` 的 12 个合成 Case、本地 run-quality projection 和 Outer 的 evaluation failure 聚类也已有代码与测试。无可复用结论时，`knowledge skip` 会留下幂等的 rejected Candidate 和事件，不生成 Knowledge 文件。
 
-角色的 Run 启动 Agent/Task 类型/Skill 白名单已经由 CLI 校验；以下仍是 Skill 或人工约束，尚未统一代码拦截：对象级读写权限、最少/独立证据数、自动重复与冲突检测、Context Pack 必须存在、high/critical 风险自动发起 Approval、Task 完成必须绑定 Artifact、统一的 verifier 通过状态。后续实现门禁命令时必须优先补齐这些项，不能把它们继续留在 prompt 里。
+`ikb health` 只读取最近一次 `doctor --write-summary` 与 `ledger verify --write-summary` 生成的紧凑快照。它不重新扫描 Source、Knowledge 或 Ledger：账本修改时间晚于快照时必须报告 `stale`，缺少快照或完整校验失败时不能伪装成健康。完整问题明细仍只来自 `doctor` 和 `ledger verify`。
+
+角色的 Run 启动 Agent/Task 类型/Skill 白名单已经由 CLI 校验；`run plan` 会确定性校验 DAG，并在步骤事件出现后冻结计划。Context Pack 已强制继承 Task scope、内容寻址为 Artifact 并写入 lineage，Run Eval 会在终态后检查 plan/step/artifact/gate/verifier 的完整覆盖。注意：`succeeded` 和质量结论仍是两个字段，Eval blocked 不会篡改终态，必须显式 retry 后取得 `finalPass=true`。对象级读写权限、high/critical 风险自动发起 Approval、Task done 强制绑定通过的 Verifier 等仍未全部成为前置阻断，不能在文档中宣称已自动执行。
+
+人物检索资格由 Core 的单一函数判定，不由各 Skill Prompt 自行放宽。默认召回只接受通过当前质量门禁的 QV4 `person_observation`；历史人物卡继续可读但不进入搜索和 Context，人物 dossier/evidence view 也不能冒充 Knowledge。
 
 ### `ikb-harness` 的职责边界
 
@@ -224,29 +271,55 @@ Source intake 和语义深读不是同一个门槛。每日增量同步只负责
 - 账本中 Knowledge feedback 为 `partial`/`incorrect`；
 - 新的决策、规则、约束或停止条件。
 
-Experience Record 只保存信号计数、Source/record/event/Run 引用、时间和状态，不保存原始长文本，也不直接生成 Knowledge。无信号的会话不进入队列；没有明确 Source→Run 交接的会话可以分析，但不能被当成独立 Run 晋级。人物 dossier 仍按 intake checkpoint/每日视图重建，人物 Knowledge 仍需独立 Episode 和身份门禁。
+Experience Record 只保存信号计数、Source/record/event/Run 引用、时间和状态，不复制原始长文本，也不直接生成 Knowledge。Triage 先按 adapter 与稳定 conversation ID 合并同一会话在不同历史根目录中的重复快照，再按相邻消息超过 6 小时切成独立工作 Episode；消息内容、时间、角色和引用相同的记录只保留一个规范引用。旧分段算法生成的 Experience 不删除，但标记 `segmentation_superseded`，不再参加队列或聚类。无信号的新 Episode 不落活动 Experience；曾经入队但复核后无信号的记录转为 `ignored`，不制造分析任务。自动化 Prompt、工具结果、评估题面和明确成功/否定错误不会被当作真实失败。
 
-每周聚类只允许两种确定性晋级条件：同一模式有至少 3 个独立 Run，或至少 2 个独立 Run 且有一次真实 `verification_completed`/`evaluation_completed=result=pass`。满足后生成 `ikb-knowledge-candidate.v1`，状态固定为 `pending_review`，claim、适用范围、边界、使用契约、验证计划、置信度和时间状态保持待分析，交给 Analyst/Curator 和人工确认。候选不是 Knowledge，不能被 Context Pack 当作可执行规则；只有补齐完整 Knowledge Card 并走现有 admit/verify 门禁后才可进入 Vault。
+真实消费者产生的 `partial`/`incorrect` feedback 可能没有 Source。只有 feedback 绑定了同 scope 的目标 Knowledge、真实 Task/Run，并引用该 Run 已登记且 hash 可校验的 Artifact 时，Triage 才建立事件型 Experience。它的 Context 只投影 feedback、目标 Knowledge、Task/Run 和 Artifact 路径/hash，不复制 Artifact 正文。事件型 Experience 只能提出对被反馈 Knowledge 的 `revise/retire`；一次 feedback 暴露出的互补能力缺口不能直接创建新 Knowledge，必须回到普通 Source/Episode 证据门槛。
+
+命中信号只进入 `experience queue`。队列按人工纠偏、Knowledge 错误反馈、Verifier 驳回、非显然修复和证据长度排序；关联 IKB 维护 Run 或普通 `verification_completed` 只表示流程关系，不作为知识内容已验证。Analyst 必须提交 `ikb-experience-analysis.v1`：标题、摘要、`candidate/skip/gap`、原因、事实/推断/未知项、精确 Source Record/Event 引用、反证搜索和未知项。`candidate` 还必须包含稳定语义模式、`new/revise/retire`、目标 Knowledge、完整适用范围、边界、使用步骤、检查项、停止条件和验证计划。引用不属于当前 Experience、缺事实、缺反证或使用契约不完整时，Core 确定性拒绝；事件型 Experience 若尝试 `new` 或指向其他 Knowledge，也会被拒绝。
+
+Analysis 按内容 hash 写不可变 revision，Experience 只指向当前 revision；相同输入重复分析幂等。Source 内容变化、Triage 处置变化或来源退出当前分析面时，旧 Analysis 自动失效，Experience 回到 `queued`，历史 revision 仍可回放。`gap` 和 `skip` 不参加聚类。
+
+新知识模式每周只允许两种确定性晋级条件：同一语义模式有至少 3 个独立 Agent Run，或至少 2 个独立 Run 且有一次分析专属 Artifact 验证。导入的 Agent 历史以去重后的顶层会话作为 Run 身份；同一会话按时间切出的多个 Episode 只用于分析隔离，合计仍算一个 Run。IKB 事件型 Experience 以真实 Run ID 作为身份。分析专属验证必须绑定当前 Analysis 和一个已登记、文件仍存在且 hash 未变化的 Artifact；普通维护 Run 通过不能代替内容验证。满足后生成 `ikb-knowledge-candidate.v1`，状态为 `pending_review`，并带出 claim 变体、证据、适用范围、边界、使用契约和验证方案。对现有 Knowledge 的直接反例走 `revise/retire`：一个有事实引用、目标 Knowledge 和反证搜索的 Analysis 就可以形成待复核修订候选，因为单个反例足以否定无条件规则，但仍不能自动修改 Vault。
+
+Knowledge Candidate 不是 Knowledge，不能被 Context Pack 当作可执行规则。`pending_review` 也只表示它进入 Curator 队列，不表示已经可以让用户判断。Curator 必须先做正文级 diff，选择新增、修订、合并、退役或拒绝，保留旧版本与 lineage，并把主张、可回放证据、适用范围、边界、使用契约和验证计划整理为单一完整稿。
+
+进入用户确认队列前还必须登记 `ikb-experience-review-package.v1`。一个评审包只绑定当前 `candidateContentHash`，并要求完整稿、至少一份验证报告和讲人话确认说明全部是同 scope、同一个 `ikb-knowledge-curator` Run 的已登记 Artifact。新完整稿必须是 QV5 draft、带 `experience-candidate:<id>`，修订稿保持目标 Knowledge 的 ID/type/collection；同时引用同 scope 的 `knowledge-extraction-manifest/result/fidelity` Artifact。Core 不信任保存的 `publishable` 字段，会用 manifest/result 重新计算报告，核对 Case/Product/canonical key/fact refs/questions，并要求正文与确定性 Product View 完全一致。验证报告必须写明 Candidate ID、当前 Candidate hash 和完整稿 hash；确认说明必须点名 Candidate、列出具体编号，并说明确认或驳回后会发生什么。历史已登记的 QV4 包仍可审计；新 QV4 包、Artifact 内容变化、路径越界、符号链接、跨 Run、类型错位或 Candidate hash 变化都会使评审包失效。`candidate-decide accept` 只接受当前评审包中的同字节完整稿。
+
+Knowledge Candidate 的确定性状态为 `pending_review → accepted/rejected → applied`。`accepted` 只表示用户接受了当前 `candidateContentHash` 对应的候选。确认时默认使用当前评审包已经绑定、且用户从单页确认稿看到的完整知识稿，不再要求用户复制 `--file` 路径；显式 `--file` 只作为内部兼容入口，并继续做逐字 hash 校验。Core 把完整稿复制到 `experiences/reviews/<candidate-id>/<sha256>.md` 的不可变确认快照，Decision Event 只保存相对引用和 hash。`apply-candidate` 仅接受字节与确认快照一致的完整稿。
+
+新增知识必须是同 scope、同 Candidate 类型的 QV5 `draft`，`source_refs` 同时覆盖 Candidate 的 Source 和 `experience-candidate:<id>`；Core 以原字节排他写入 Vault，同 ID 异内容、活动 `canonical_key` 冲突都拒绝。文件写入、索引重建、`knowledge.created` 和 Candidate `applied` 按固定顺序执行；任一步中断后，重跑会从已存在的同字节 Knowledge 补齐后续状态。修订知识还会重新校验目标 Knowledge、Vault 路径、before/after snapshot、revision、status、canonical key 和 journal ref；事务中断后由 `revision-recover` 幂等恢复，旧版本继续保存在 revision journal 中。
 
 对应命令：
 
 ```bash
-./bin/ikb experience triage --scope work --adapter all --limit 500
+./bin/ikb experience triage --scope work --adapter all --limit 0
 ./bin/ikb experience list --scope work
+./bin/ikb experience queue --scope work --limit 100
+./bin/ikb experience analyze <experience-id> --file <analysis.json>
+./bin/ikb experience analysis-list --scope work
+./bin/ikb experience validate <experience-id> --result pass --method <方法> --note <结论> --artifact <artifact-id>
 ./bin/ikb experience cluster --scope work --min-samples 3
 ./bin/ikb experience candidate-list --scope work
+./bin/ikb experience candidate-review <candidate-id> --draft <完整稿-artifact-id> --validation <验证-artifact-id> --guide <确认说明-artifact-id>
+./bin/ikb experience candidate-review-show <candidate-id>
+./bin/ikb experience candidate-decide <candidate-id> --decision accept --reason <讲清采用理由> --file <完整知识稿.md>
+./bin/ikb experience candidate-decide <candidate-id> --decision reject --reason <讲清拒绝理由>
+./bin/ikb knowledge apply-candidate <新增候选-id> --file <完整知识稿.md>
+./bin/ikb knowledge apply-candidate <修订候选-id> --file <完整知识稿.md> --primary <knowledge-id>
+./bin/ikb knowledge revision-list
+./bin/ikb knowledge revision-recover <revision-id>
 ```
 
 ### 全局推理与确认项压缩
 
-Experience、候选和 Knowledge 的数量都不是用户待办。每轮分析先执行 `reasoning`，将已有 Draft 的确认项按确定性原则分成三类：`auto_resolved`（已有边界可自动采用）、`defer_until_task`（需要最新配置/SOP/日志/真实验证，绑定到具体 Task）、`ask_user`（人物身份与稳定观察、高风险规则/Approval/门禁、外部副作用或证据无法推出的组织选择）。系统保留逐条问题和证据引用，但只把 `ask_user` 按人物/政策合并成决策包。
+Experience、候选和 Knowledge 的数量都不是用户待办。每轮分析先执行 `reasoning`，将已有 Draft 的确认项按确定性原则分成三类：`auto_resolved`（已有边界可自动采用）、`defer_until_task`（需要最新配置/SOP/日志/真实验证，或尚未绑定具体目标的规则/Approval/外部动作）、`ask_user`（已经达到证据门槛的 Knowledge Candidate，以及人物身份与稳定观察边界）。系统保留逐条问题和证据引用，但只把真正无法自动决定的项合并成中文决策包。
 
 ```bash
 ./bin/ikb reasoning run --scope work --json
 ./bin/ikb reasoning show --scope work --json
 ```
 
-报告写入 `ikb-data/governance/<scope>/reasoning/` 并追加 `reasoning.generated` 账本事件；它不改变 Knowledge 的 draft/verified/retired 状态，也不代表用户已经批准规则。HTML 观测页只展示输入覆盖、三类处置数量和压缩后的决策包。任何外部写入仍须独立 Approval，普通证据缺口不升级为即时询问。
+报告写入 `ikb-data/governance/<scope>/reasoning/` 并追加 `reasoning.generated` 账本事件；它不改变 Knowledge 的 draft/verified/retired 状态，也不代表用户已经批准规则。HTML 观测页只展示输入覆盖、三类处置数量和压缩后的决策包；候选详情优先读取登记评审包的精确文件清单，只有尚无评审包的旧候选才使用目录扫描兼容入口。已登记评审包失效时页面拒绝降级扫描，避免把同目录旧稿混给用户。任何外部写入仍须独立 Approval，普通证据缺口不升级为即时询问。
 
 Harness 的过程分析与 `ikb-analyst` 的内容分析分工如下：
 
@@ -282,8 +355,8 @@ Skill 只做原子能力，不负责完整任务编排。Agent 不能调用 mani
 
 | Loop | 必须输入 | 必须输出 | 证据来源 | 当前状态 |
 |---|---|---|---|---|
-| INNER 知识收敛 | `source_refs`、分析问题、scope/sensitivity、时间或 revision 边界；人物/主题和已有知识按场景提供 | Analysis Artifact、findings、evidence_refs、unknowns/conflicts、candidate_knowledge、G0～G3 结果 | `ikb-data/sources/<source-id>/`、Source events、Knowledge Markdown、Analysis Artifact | 部分落地，可手工收敛 |
-| MID 任务执行 | Task contract、角色/Skill manifest、Context Pack、plan/checkpoint、风险和 scope；重试时附历史 Run | handoff events、Run Artifact、Approval 记录、verification 结果、Knowledge references、G4～G6 结果 | `ledger/events.jsonl`、`runs/<run-id>/`、Artifact hash、测试/验收记录 | 部分落地，可手工执行 |
+| INNER 知识收敛 | `source_refs`、分析问题、scope/sensitivity、时间或 revision 边界；人物/主题和已有知识按场景提供 | Analysis Artifact、findings、evidence_refs、unknowns/conflicts、candidate_knowledge、G0～G3 结果 | `ikb-data/.system/sources/<source-id>/`、Source events、Knowledge Markdown、Analysis Artifact | 部分落地，可手工收敛 |
+| MID 任务执行 | Task contract、角色/Skill manifest、Context Pack、plan/checkpoint、风险和 scope；重试时附历史 Run | handoff events、Run Artifact、Approval 记录、verification 结果、Knowledge references、G4～G6 结果 | `.system/ledger/events.jsonl`、`.system/runs/<run-id>/`、Artifact hash、测试/验收记录 | 部分落地，可手工执行 |
 | OUTER 跨任务进化 | 复盘窗口、完成/失败 Run 集合、失败/门禁事件、Artifact 结果、Approval 决定、Knowledge 使用和历史改进建议 | Harness Review、pending pattern candidates、知识缺口、Skill/门禁改进建议、后续 Task/Plan Pack、批准状态 | Run/ledger 汇总、Artifact/verifier 结果、Knowledge 引用/修订、历史改进 Task | 已实现只读聚类；人工确认和回归应用待接 |
 
 ### 记录完整性要求
@@ -338,7 +411,7 @@ OUTER 每周读取运行摘要和已验证结果，不直接吞原始长日志�
 
 每个 Run 可以通过 `ikb run event <run-id> --type <event-type> --payload '<json>'` 追加 `harness-events.v1` 事件：`loop_started/finished`、`step_started/finished`、`handoff`、`gate_evaluated`、`verification_completed`、`evaluation_completed`、`artifact_linked`、`approval_checked` 和 `action_executed`。事件 payload 只允许稳定引用、状态、版本、计数和 hash；Prompt、模型输出、文件路径、URL、人物身份和原始 Approval payload 不属于事件契约。
 
-`run.finished=succeeded` 仍然只是终态。本地 run-quality projection 只有在必要 Gate、Verifier、Evaluation 和 Artifact 链齐全且通过时才标记 `quality_state=pass`；否则为 `block/partial`。本地 evaluator、HTML 报告和 Ledger 不依赖外部观测服务。
+`run.finished=succeeded` 仍然只是终态。本地 run-quality projection 只有在必要 Gate、Verifier、Evaluation 和 Artifact 链齐全且通过时才标记 `quality_state=pass`；否则为 `block/partial`。本地 evaluator、HTML 报告和 Ledger 不依赖外部观测服务。Experience Candidate 使用显式知识形状：`architecture / decision / entity / fact / goal / lesson / playbook / preference / principle / synthesis` 加九个 Vault collection；修订不得改变目标卡的 type/collection，同一模式出现形状冲突时阻断聚合，不做通用类型回退。
 
 ### Event Ledger
 
@@ -376,9 +449,11 @@ Action Gateway 是唯一副作用入口。CLI、未来的 UI、Agent prompt 和 
 
 Context Builder 使用一个统一 search 原语，允许关键词、属性、链接和语义召回作为内部策略，但上层只依赖统一结果。
 
-context pack 至少包含：任务目标与验收、当前状态、强制约束、相关决策、历史 pitfall、外部对象摘要、来源列表和未知项；对每条 v4 Knowledge 还要带出 `product_type/compilation_ref/fact_refs/questions_answered`，仅在类型为 playbook 时带出完整执行契约。人物观察还必须在当前问题不属于 `usable_for` 或命中 `do_not_use_for` 时抑制。默认同时检索 `verified` 和 `draft`：verified 可作为可信规则，draft 必须标为 advisory 并先核对来源/未决项；要求严格时可使用 `--verified-only`。达到任务所需信息后停止，不追求塞满上下文。
+context pack 至少包含：任务目标与验收、当前状态、强制约束、相关决策、历史 pitfall、外部对象摘要、来源列表和未知项；对每条 QV4+ Knowledge 带出 `product_type/compilation_ref/fact_refs/questions_answered`，QV5 额外带出 `canonical_key` 和 `information_loss_ref`，仅在类型为 playbook 时带出完整执行契约。人物观察还必须在当前问题不属于 `usable_for` 或命中 `do_not_use_for` 时抑制。默认同时检索 `verified` 和 `draft`：verified 可作为可信规则，draft 必须标为 advisory 并先核对来源/未决项；要求严格时可使用 `--verified-only`。达到任务所需信息后停止，不追求塞满上下文。结果数同时受相对分数阈值、单卡上限和正文总预算约束。
 
-Agent 在结果中声明 knowledgeReferences：用了哪条知识、用于哪个判断、状态是 trusted 还是 advisory、是否被本次结果验证。Context Pack 绑定 Run 时账本写入 `knowledge.referenced`；真实 Task 验收后可用 `knowledge.feedback_recorded` 记录 helpful/partial/incorrect/unused 和稳定原因码。只有后续真实 Task 验证才推动知识成熟度，路由阶段扫到文档不算引用。
+Task 标题承担主题锚点契约，必须用短语直接表达任务对象与动作；有两个必须同时消费的维度时保留两个完整短语，不能靠 goal 或 acceptance 暗示第二维度。Context Builder 用完整的标题、目标和验收召回宽候选并选择正文片段，再用标题词对 Knowledge 的标题、`use_when` 和 `questions_answered` 做主题保留。只要存在标题锚点命中，最终排序以标题查询为准，并使用固定小下限与结果上限，避免中文长标题产生的大量重叠片段让最高分卡压掉其他明确命中的维度。标题完全无命中时回退到宽候选并使用相对阈值，保证新主题不会因为锚点词典尚未覆盖而零召回。Artifact 必须记录是否启用锚点、锚点命中数、宽候选数和最终保留数，便于判断误召回和漏召回。
+
+Context Pack 必须继承 Task scope；显式传入不同 scope 会在读取前被拒绝。绑定 Run 后，每个内容版本写入 `context-pack-<hash>.md`、自动登记 Artifact 和 `run.artifact_linked(produced)`，`context-pack.md` 只保留最新投影。Agent 在结果中声明 knowledgeReferences：用了哪条知识、用于哪个判断、状态是 trusted 还是 advisory、是否被本次结果验证。账本写入绑定 `contextHash` 和 Artifact ID 的 `knowledge.referenced`；真实 Task 验收后可用 `knowledge.feedback_recorded` 记录 helpful/partial/incorrect/unused 和稳定原因码。只有后续真实 Task 验证才推动知识成熟度，路由阶段扫到文档不算引用。
 
 ## 六类工作流契约
 

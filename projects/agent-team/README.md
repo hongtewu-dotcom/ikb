@@ -13,8 +13,9 @@ Agent Team 是 IKB 下的独立实验项目，用来迭代 Codex 原生子 Agent
 - 25 项项目测试、候选包结构校验和 Codex 插件校验已通过。
 - 首轮 A/B 证明候选能抑制一个短来源误拆场景；真正并行审计没有性能优势，因此当前定位仍是受控试用。
 - 已安装 `agent-teams@ikb-agent-team` 2.0.0；新任务只发现三个入口，单文件 canary 为 0 spawn。
+- 已接入 IKB Harness：每 6 小时从 Codex rollout 增量采集元数据，带证据样本可直接进入 Eval Plane Campaign；监控不注册 Hook，也不阻断 Codex 或知识维护。
 
-现行设计见 [Agent Team 独立演进方案](docs/evolution-plan.md)；迁移前的问题审计保留在 [历史审计](docs/audit-20260826-pre-migration.md)，只作证据，不再约束当前实现。
+现行设计见 [Agent Team 独立演进方案](docs/evolution-plan.md)，采集合同和首轮正式 Campaign 见 [持续效果监控](docs/monitoring.md)；迁移前的问题审计保留在 [历史审计](docs/audit-20260826-pre-migration.md)，只作证据，不再约束当前实现。
 
 ## 目录
 

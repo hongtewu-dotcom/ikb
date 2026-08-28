@@ -15,6 +15,7 @@ import {
 } from "./contracts.ts";
 import { hasStableKnowledgeId, parseKnowledge, setFrontmatterScalar, tryParseKnowledge } from "./codec.ts";
 import { inspectKnowledgeQuality } from "./quality.ts";
+import { inspectPrincipleConfirmation } from "./principle-admission.ts";
 import { listKnowledge } from "./records.ts";
 import {
   ensurePrivateDirectory,
@@ -25,6 +26,7 @@ import {
   migrationJournalRoot,
 } from "./storage.ts";
 import { rebuildKnowledgeViews } from "./views.ts";
+import { pendingKnowledgeRevisionJournals } from "./revision.ts";
 
 interface KnowledgeMigrationJournal {
   id: string;
@@ -130,6 +132,7 @@ export function inspectKnowledgeLayout(home: string, scope?: string): KnowledgeL
   const invalidFiles: string[] = [];
   const scopeMismatchFiles: string[] = [];
   const pendingMigrationJournals = pendingMigrationJournalPaths(home, scope);
+  const pendingRevisionJournals = pendingKnowledgeRevisionJournals(home, scope);
   const records: KnowledgeRecord[] = [];
   const qualityIssues: KnowledgeQualityIssue[] = [];
   for (const currentScope of knowledgeScopes(scope)) {
@@ -157,6 +160,10 @@ export function inspectKnowledgeLayout(home: string, scope?: string): KnowledgeL
     records.push(...scopeRecords);
     for (const record of scopeRecords) {
       qualityIssues.push(...inspectKnowledgeQuality(record));
+      if (record.status === "verified") {
+        const problem = inspectPrincipleConfirmation(home, record, "retrieval");
+        if (problem) qualityIssues.push({ knowledgeId: record.id, path: record.path, code: problem.code, detail: problem.detail });
+      }
       const topLevel = relative(vault, record.path).split(/[\\/]/)[0];
       if ((KNOWLEDGE_DIRECTORIES as readonly string[]).includes(topLevel) && topLevel !== resolveKnowledgeDirectory(record.type, record.collection)) {
         misplacedFiles.push(record.path);
@@ -166,8 +173,24 @@ export function inspectKnowledgeLayout(home: string, scope?: string): KnowledgeL
   const counts = new Map<string, number>();
   for (const record of records) counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
   const duplicateIds = [...counts.entries()].filter(([, count]) => count > 1).map(([id]) => id).sort();
+  const activeCanonicalKeys = new Map<string, KnowledgeRecord[]>();
+  for (const record of records) {
+    if (record.status === "retired" || record.qualityVersion < 5 || !record.canonicalKey) continue;
+    activeCanonicalKeys.set(record.canonicalKey, [...(activeCanonicalKeys.get(record.canonicalKey) ?? []), record]);
+  }
+  for (const [canonicalKey, collisions] of activeCanonicalKeys) {
+    if (collisions.length < 2) continue;
+    for (const record of collisions) {
+      qualityIssues.push({
+        knowledgeId: record.id,
+        path: record.path,
+        code: "active_canonical_key_duplicate",
+        detail: `active canonical_key ${canonicalKey} is also owned by ${collisions.filter((item) => item.id !== record.id).map((item) => item.id).join(", ")}`,
+      });
+    }
+  }
   return {
-    ok: missingPaths.length === 0 && duplicateIds.length === 0 && misplacedFiles.length === 0 && invalidFiles.length === 0 && scopeMismatchFiles.length === 0 && pendingMigrationJournals.length === 0 && qualityIssues.length === 0,
+    ok: missingPaths.length === 0 && duplicateIds.length === 0 && misplacedFiles.length === 0 && invalidFiles.length === 0 && scopeMismatchFiles.length === 0 && pendingMigrationJournals.length === 0 && pendingRevisionJournals.length === 0 && qualityIssues.length === 0,
     missingPaths: missingPaths.sort(),
     legacyFiles: legacyFiles.sort(),
     duplicateIds,
@@ -175,6 +198,7 @@ export function inspectKnowledgeLayout(home: string, scope?: string): KnowledgeL
     invalidFiles: invalidFiles.sort(),
     scopeMismatchFiles: scopeMismatchFiles.sort(),
     pendingMigrationJournals,
+    pendingRevisionJournals,
     qualityIssues: qualityIssues.sort((left, right) => left.path.localeCompare(right.path) || left.code.localeCompare(right.code)),
   };
 }

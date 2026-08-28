@@ -3,6 +3,7 @@ import { LedgerStore } from "../store.ts";
 import { assertValue, printValue } from "../format.ts";
 import { canonicalAgentId, validateAgentInvocation } from "../roles.ts";
 import { finishRunAndAssess } from "../run-completion.ts";
+import { writeRunPlan } from "../run-plan.ts";
 import type { HarnessEventType } from "../../projects/eval-plane/src/harness-events.ts";
 import { createDefaultEvalRegistry } from "../../projects/eval-plane/src/eval-registry.ts";
 import { coordinateRunEvaluation } from "../../projects/eval-plane/src/evaluation-coordinator.ts";
@@ -94,6 +95,9 @@ export function handleRun(store: LedgerStore, home: string, action: string | und
     }
     case "checkpoint":
       printValue(store.checkpointRun(requiredArg(args, 0, "run id"), requiredOption(parsed, "step", "checkpoint")), outputFormat(parsed));
+      break;
+    case "plan":
+      printValue(writeRunPlan(store, requiredArg(args, 0, "run id"), requiredOption(parsed, "file")), outputFormat(parsed));
       break;
     case "event": {
       const runId = requiredArg(args, 0, "run id");

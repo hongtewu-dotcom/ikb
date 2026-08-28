@@ -5,8 +5,15 @@ export {
   EXTRACTION_VALIDATION_VERSION,
   type ExtractionFidelityReport,
   type ExtractionFidelityVerdict,
+  type ExtractionInformationLossMetrics,
   type ExtractionValidationIssue,
   type ExtractionValidationReport,
 } from "./extraction/contracts.ts";
-export { renderCompilation, renderExtractionBatch, type RenderedCompilation } from "./extraction/render.ts";
+export { renderCompilation, renderExtractionBatch, renderKnowledgeProductBody, type RenderedCompilation } from "./extraction/render.ts";
+export {
+  buildSourceStructureInventory,
+  SOURCE_STRUCTURE_INVENTORY_VERSION,
+  type SourceStructureInventory,
+  type SourceStructureUnit,
+} from "./extraction/inventory.ts";
 export { validateExtractionBatch, verifyExtractionBatch } from "./extraction/validation.ts";

@@ -49,6 +49,14 @@ export function optionalOption(parsed: ParsedArgs, ...names: string[]): string |
   return value === undefined ? undefined : String(value);
 }
 
+export function optionalBoundedInteger(parsed: ParsedArgs, name: string, minimum: number, maximum: number): number | undefined {
+  const raw = optionalOption(parsed, name);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  assertValue(Number.isInteger(value) && value >= minimum && value <= maximum, `--${name} must be an integer from ${minimum} to ${maximum}`);
+  return value;
+}
+
 export function incrementalOption(parsed: ParsedArgs): boolean {
   return parsed.options["no-incremental"] !== true;
 }

@@ -43,6 +43,30 @@ test("ledger persists a task, run, approval, artifact and retry history", () => 
   reopened.close();
 });
 
+test("a terminal-succeeded Run can retry only after quality is explicitly blocked", () => {
+  const home = freshHome();
+  const store = new LedgerStore({ home, actor: "test" });
+  const task = store.createTask({ title: "Quality retry", goal: "repair quality", acceptance: "quality pass", type: "general" });
+  const run = store.createRun(task.id, "ikb-operator", ["ikb-use-knowledge"]);
+  store.finishRun(run.id, "succeeded", "runtime finished");
+  assert.throws(() => store.retryRun(run.id), /blocked\/partial Evaluation/);
+  store.recordHarnessEvent(run.id, "run.evaluation_completed", {
+    evalVersion: "eval-plane.v1",
+    suiteId: "ikb-run-quality",
+    result: "blocked",
+    reasonCodes: ["context_retrieval_noise"],
+    totalCases: 1,
+    passedCases: 0,
+    failedCases: 1,
+    failedCaseRefs: ["case://context-relevance"],
+    artifactRefs: ["artifact://evaluation"],
+  });
+  const retry = store.retryRun(run.id);
+  assert.equal(retry.retryOf, run.id);
+  assert.equal(retry.skillIds, "ikb-use-knowledge");
+  store.close();
+});
+
 test("doctor detects a tampered event hash", () => {
   const home = freshHome();
   const store = new LedgerStore({ home });
@@ -55,6 +79,33 @@ test("doctor detects a tampered event hash", () => {
   const reopened = new LedgerStore({ home });
   assert.equal(reopened.verify().brokenChains.length, 1);
   reopened.close();
+});
+
+test("ledger read projection refreshes when another process appends events", () => {
+  const home = freshHome();
+  const reader = new LedgerStore({ home, actor: "reader" });
+  assert.equal(reader.listTasks().length, 0);
+  const writer = new LedgerStore({ home, actor: "writer" });
+  const task = writer.createTask({ title: "External update", goal: "Refresh the read model", acceptance: "Reader sees it" });
+  writer.close();
+  assert.equal(reader.getTask(task.id)?.title, "External update");
+  assert.equal(reader.listTasks().length, 1);
+  reader.close();
+});
+
+test("source scan events can be appended as one verified batch", () => {
+  const home = freshHome();
+  const store = new LedgerStore({ home, actor: "intake" });
+  const events = store.recordSourceEvents([
+    { id: "history:codex:a", eventType: "source.incremental_scan", payload: { status: "imported", deltaCount: 2 } },
+    { id: "history:codex:a", eventType: "source.incremental_scan", payload: { status: "imported", deltaCount: 1 } },
+    { id: "history:claude:b", eventType: "source.incremental_scan", payload: { status: "imported", deltaCount: 1 } },
+  ]);
+
+  assert.deepEqual(events.map((event) => event.sequence), [1, 2, 1]);
+  assert.equal(readFileSync(store.eventsPath, "utf8").trim().split("\n").length, 3);
+  assert.equal(store.verify().brokenChains.length, 0);
+  store.close();
 });
 
 test("task transitions reject impossible state changes", () => {

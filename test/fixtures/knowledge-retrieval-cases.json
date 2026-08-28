@@ -1,0 +1,39 @@
+{
+  "schema": "ikb-knowledge-retrieval-regression.v1",
+  "cases": [
+    { "id": "non-person-coding-01", "taskType": "coding", "title": "IKB检索回归实现", "goal": "修复 Agent 知识路由", "acceptance": "相关结果可用", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-general-02", "taskType": "general", "title": "IKB效果评估", "goal": "分析知识查询和实际使用", "acceptance": "形成改进结论", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-review-03", "taskType": "review", "title": "IKB检索实现评审", "goal": "检查召回相关性", "acceptance": "指出路由风险", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-cr-04", "taskType": "cr", "title": "IKB召回逻辑CR", "goal": "核对 Context Pack 结果", "acceptance": "不混入人物卡", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-document-05", "taskType": "document", "title": "IKB阶段效果文档", "goal": "说明知识检索效果", "acceptance": "事实和结论分开", "includes": ["技术文档事实与边界写作卡"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-coding-06", "taskType": "coding", "title": "Agent知识路由修复", "goal": "让 IKB 准确召回", "acceptance": "回归用例通过", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-general-07", "taskType": "general", "title": "知识工具评估回归", "goal": "判断 IKB 是否有效", "acceptance": "基于使用信号", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-review-08", "taskType": "review", "title": "Context Pack相关性评审", "goal": "检查弱相关填充", "acceptance": "无关结果退出", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-document-09", "taskType": "document", "title": "知识使用效果说明", "goal": "写清召回和使用差异", "acceptance": "指标可追溯", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "non-person-general-10", "taskType": "general", "title": "知识库改进方案", "goal": "提高检索命中和实际使用", "acceptance": "有回归标准", "includes": ["IKB检索回归与效果评估"], "excludes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+
+    { "id": "explicit-person-11", "taskType": "general", "title": "王嘉涛 Agent工具评估", "goal": "核对可观察的协作顺序", "acceptance": "不推断人格", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "explicit-person-12", "taskType": "coding", "title": "王嘉涛 Agent工具接入检查", "goal": "把明确人物观察用于准备", "acceptance": "只取窄范围事实", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "explicit-person-13", "taskType": "document", "title": "王嘉涛 工具协作观察", "goal": "整理有证据的沟通背景", "acceptance": "保留时间边界", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "explicit-person-14", "taskType": "general", "title": "wangjiatao Agent tool evaluation", "goal": "prepare a bounded collaboration note", "acceptance": "cite evidence", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "explicit-person-15", "taskType": "review", "title": "王嘉涛 工具复用路径评审", "goal": "准备评审上下文", "acceptance": "不替代当前确认", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+
+    { "id": "communication-16", "taskType": "communication", "title": "Agent工具方案沟通", "goal": "说明可用性和复用路径", "acceptance": "形成沟通提纲", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "upward-17", "taskType": "upward-management", "title": "Agent工具评估同步", "goal": "汇报验证和复用结论", "acceptance": "说明未知项", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "communication-18", "taskType": "communication", "title": "工具复用路径沟通", "goal": "准备方案讨论", "acceptance": "避免无依据判断", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "upward-19", "taskType": "upward-management", "title": "知识工具方案汇报", "goal": "说明真实验证与副作用", "acceptance": "区分观察和决定", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+    { "id": "communication-20", "taskType": "communication", "title": "Agent 工具能力接入讨论", "goal": "先核对能力再讨论包装", "acceptance": "输出检查问题", "includes": ["王嘉涛：Agent工具评估顺序（观察）"] },
+
+    { "id": "empty-weak-21", "taskType": "general", "title": "月球轨道库存回放", "goal": "寻找专门知识", "acceptance": "无答案时返回空", "empty": true },
+    { "id": "empty-weak-22", "taskType": "coding", "title": "火星订单量子校验", "goal": "寻找实现约束", "acceptance": "不拿旁路正文凑数", "empty": true },
+    { "id": "empty-weak-23", "taskType": "review", "title": "海底航班缓存协议", "goal": "寻找评审规则", "acceptance": "无相关卡则返回空", "empty": true },
+    { "id": "empty-weak-24", "taskType": "document", "title": "卫星票台路由实验", "goal": "寻找事实材料", "acceptance": "拒绝弱相关结果", "empty": true },
+    { "id": "empty-weak-25", "taskType": "cr", "title": "深空退款时序", "goal": "寻找当前实现知识", "acceptance": "没有答案不填充", "empty": true },
+
+    { "id": "typed-architecture-26", "taskType": "coding", "title": "机票预订架构依赖", "goal": "定位组件和系统边界", "acceptance": "返回架构知识", "includes": ["机票预订系统架构与依赖边界"] },
+    { "id": "typed-review-27", "taskType": "review", "title": "代码评审风险验证", "goal": "形成检查清单", "acceptance": "返回评审作业卡", "includes": ["代码评审风险与验证作业卡"] },
+    { "id": "typed-document-28", "taskType": "document", "title": "技术文档事实边界", "goal": "区分现状、计划和未知", "acceptance": "返回写作卡", "includes": ["技术文档事实与边界写作卡"] },
+    { "id": "typed-project-29", "taskType": "general", "title": "IKB项目状态改进路线", "goal": "查看当前阶段和下一步", "acceptance": "返回项目卡", "includes": ["IKB项目状态与改进路线"] },
+    { "id": "typed-architecture-30", "taskType": "coding", "title": "架构拓扑组件依赖", "goal": "核对预订系统链路", "acceptance": "返回架构卡", "includes": ["机票预订系统架构与依赖边界"] }
+  ]
+}

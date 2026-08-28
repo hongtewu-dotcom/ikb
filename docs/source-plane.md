@@ -72,6 +72,22 @@ discover
 
 扫描必须支持增量游标和重复执行。每次扫描记录范围、游标、快照哈希、导入数量、跳过数量和失败原因；原始快照不被分析结果覆盖。
 
+### Intake 回执、别名和长期引用
+
+Source 接入成功只表示证据已经保存，不表示其中的结论已经成为 Knowledge。直接文件接入和学城接入统一返回 `ikb-source-intake-receipt.v1` 回执，至少包含 Source ID、标题、原始位置、内容 hash、版本关系、业务别名，以及关联 Knowledge 的状态。没有关联 Knowledge 时，回执必须明确写“仅 Source，未准入为知识”。
+
+Source 可按稳定 ID、精确或部分标题、原始文件名、学城 page/collabpage URL 和显式业务别名查询。别名单独保存在 `sources/aliases.json`，同一归一化别名只能属于一个 Source；它只是检索入口，不改变 Source 内容或 Knowledge 状态。
+
+`AGENTS.md`、Skill、Knowledge 和长期治理文档中的关键资料引用，由 `ikb-reference-manifest.v1` 显式登记。`source reference-lint` 检查引用位置仍包含 marker、目标是否能唯一解析，以及需要时目标是否可从默认 Knowledge 检索到；普通缺口默认报告 warning，只有 manifest 明确标成 blocking 的错误执行风险才阻断。检查报告写入 `governance/<scope>/sources/`，不会修改引用方或目标内容。
+
+```bash
+./bin/ikb source receipt <source-id> --json
+./bin/ikb source alias-add <source-id> --alias "业务别名,另一个别名" --json
+./bin/ikb source lookup "标题或别名" --scope work --json
+./bin/ikb source lookup "https://km.sankuai.com/collabpage/<content-id>" --scope work --json
+./bin/ikb source reference-lint --manifest <reference-manifest.json> --write --json
+```
+
 ## 人物蒸馏
 
 人物不是一条普通事实，也不是每条消息都触发一次的实时摘要。输入层先按 Source/record 增量保存；人物 dossier 是从不可变 Source 全量重建的证据投影，按 intake 批次关闭或每日计划重建，而不是在每条消息到达时叠加正文。人物分析/蒸馏是更慢的合并窗口：默认每周一次，或在出现至少 3 个新增 direct Episode、2 个独立新 Source、身份映射变更或用户明确要求时提前触发。
@@ -98,6 +114,8 @@ discover
 
 评论应归一化为 `review_comment`，包含评论者、定位信息、评论内容、处理状态和最终处理理由。被接受的评论可以形成 `decision`、`pitfall` 或 `playbook` 候选；被拒绝的评论也保留理由，供以后分析判断偏差。
 
+本地文档和评论不再依赖临时命令清单。`ikb init` 会创建四个私有收件箱：`ikb-data/inbox/{work,personal}/documents/` 与 `ikb-data/inbox/{work,personal}/review-comments/`，并把它们写入 `ikb-data/entities/source-targets.json`。维护流程调用 `source sync-targets` 消费登记表；文件内容未变化时按路径、大小、修改时间和内容 hash 跳过，变更只生成新的不可变增量 Source。空收件箱表示“已检查但当前为空”，不会被误报成接入欠账。系统不扫描整个工作区，也不把 `docs/`、Vault 或维护产物再次作为输入，避免自我引用循环。
+
 ## 存储与权限
 
 文档和知识分两层落盘：ikb 的设计/契约/验收文档放在仓库 `docs/`，会进入版本管理；真实知识与原始材料按原始证据保存在项目本地 `ikb-data/`，通过 Obsidian 打开 Vault，不进入 GitHub。系统不对本地原文自动脱敏；脱敏只属于明确的对外发布流程。
@@ -105,19 +123,21 @@ discover
 目标目录（当前已落地的是每个 Source 的 `source.json`、`raw/` 和 `records.jsonl`；全局 manifest/messages/episodes 索引留给增量与分段切片）：
 
 ```text
-ikb/ikb-data/sources/<source-id>/source.json
-ikb/ikb-data/sources/<source-id>/raw/
-ikb/ikb-data/sources/<source-id>/records.jsonl
-ikb/ikb-data/sources/manifest.jsonl
-ikb/ikb-data/sources/messages.jsonl
-ikb/ikb-data/sources/episodes.jsonl
-ikb/ikb-data/vaults/personal/{domains,projects,people,concepts,decisions,playbooks,lessons,syntheses}/
-ikb/ikb-data/vaults/work/{domains,projects,people,concepts,decisions,playbooks,lessons,syntheses}/
+ikb/ikb-data/.system/sources/<source-id>/source.json
+ikb/ikb-data/.system/sources/<source-id>/raw/
+ikb/ikb-data/.system/sources/<source-id>/records.jsonl
+ikb/ikb-data/.system/sources/aliases.json
+ikb/ikb-data/.system/sources/manifest.jsonl
+ikb/ikb-data/.system/sources/messages.jsonl
+ikb/ikb-data/.system/sources/episodes.jsonl
+ikb/ikb-data/knowledge/personal/{domains,projects,people,concepts,decisions,playbooks,lessons,syntheses}/
+ikb/ikb-data/knowledge/work/{domains,projects,people,concepts,decisions,playbooks,lessons,syntheses}/
 ikb/ikb-data/governance/personal/{gaps,conflicts,reviews}/
 ikb/ikb-data/governance/work/{gaps,conflicts,reviews}/
+ikb/ikb-data/governance/<scope>/sources/{reference-manifest.json,reference-lint.json,reference-lint.md}
 ikb/ikb-data/governance/<scope>/candidates/pool.jsonl
 ikb/ikb-data/governance/<scope>/incremental/state.jsonl
-ikb/ikb-data/ledger/events.jsonl
+ikb/ikb-data/.system/ledger/events.jsonl
 ```
 
 Source Plane 的原始数据和索引都属于项目内 `ikb-data/` 的本地私有数据，不进入公开 Git 仓库；目录使用仅当前用户可访问的权限，证据文件使用仅当前用户可读写的权限。`.gitignore` 还对常见的项目根目录数据路径做了防御性忽略。`personal` 和 `work` 默认物理隔离，关系和 Context Pack 不得跨域混用；跨域使用必须显式确认。
@@ -129,13 +149,13 @@ Source Plane 的原始数据和索引都属于项目内 `ikb-data/` 的本地私
 | adapter | 默认目录 | 归一化规则 |
 |---|---|---|
 | `claude` | `~/.claude/projects/` | 读取人类主会话，跳过 thinking、系统包装和控制记录；sidechain 仅在 `--include-tools` 下按 agent 身份保留 |
-| `codex` | `~/.codex/sessions/`、`~/.codex/archived_sessions/` | 读取 `user_message` / `agent_message` 和窄化的 assistant final answer；subagent 会话仅在 `--include-tools` 下按 agent 身份保留 |
+| `codex` | `~/.codex/sessions/`、`~/.codex/archived_sessions/` | 流式读取 `user_message` / `agent_message` 和窄化的 assistant final answer；subagent 会话仅在 `--include-tools` 下按 agent 身份保留 |
 | `desk` | `~/.catpaw/projects/` | 读取 `user` / `assistant` 消息，工具记录默认关闭 |
 | `elephant`（导出） | 无默认目录；必须传 `--root <approved-export-dir>` | 读取导出 JSONL/NDJSON 的消息正文、会话、发送者和参与者 |
 | `elephant`（本机桥接） | 已登录大象页面的 CDP，由 `dx history` 按指定 uid/gid/pid/name/mis 拉取 | 保存 `dx --raw-payload` 原始响应；解析文本节点、@、链接、发送者、时间和 mid/uuid；必须有界，不支持无目标全量扫描；只读，不发送 |
 | `citadel` | 学城 `oa-skills citadel` | 读取当前 Markdown、元信息、划词/全文评论；文档和评论拆成两个 Source，评论回复保留父子关系 |
 
-命令分成两步：`source discover` 只列出文件路径、大小和修改时间，不复制原文；`source ingest-history` 才会把原始文件复制到 `ikb-data/sources/<source-id>/raw/`，再生成标准化 `records.jsonl`。raw 和 normalized bytes 分别保存 hash。历史适配器默认启用增量：首次导入建立 Source，后续文件追加只导入新增/变更记录；完全不变的输入跳过。每次扫描的 logical key、前序 Source、内容 hash、游标、导入/重复/变更数量追加到 `governance/<scope>/incremental/state.jsonl`，并记录 `source.incremental_scan` 账本事件。旧版没有 normalized hash 的 Source 仍可列出和读取，但会被 `doctor` 标成兼容警告，也不会作为增量去重依据。工具输出只有显式传 `--include-tools` 才进入标准化记录。只有控制记录、没有用户可见消息的文件会标为 skipped，不创建空 Source；显式传入不存在或不是目录的 `--root` 会直接失败。需要保留旧的整快照行为时，显式传 `--no-incremental`。
+命令分成两步：`source discover` 只列出文件路径、大小和修改时间，不复制原文；`source ingest-history` 流式读取历史文件，把真正进入分析面的原始行写入 `ikb-data/.system/sources/<source-id>/raw/`，再生成标准化 `records.jsonl`。默认不把工具输出、thinking、系统包装和控制记录复制进 IKB；Codex 的 session meta 会随可见消息保留，保证会话身份可回放。raw 和 normalized bytes 分别保存 hash。历史适配器默认启用增量：首次导入建立 Source，后续文件追加只导入新增/变更记录；完全不变的输入跳过。每次扫描的 logical key、前序 Source、内容 hash、游标、导入/重复/变更数量追加到 `governance/<scope>/incremental/state.jsonl`；只有真实新增/变更的历史 Source 追加 `source.incremental_scan` 账本事件，整批无变化由 `source.history_scan` 汇总，避免每六小时为同一批无变化文件重复写数千条事件。旧版没有 normalized hash 的 Source 仍可列出和读取，但会被 `doctor` 标成兼容警告，也不会作为增量去重依据。工具输出只有显式传 `--include-tools` 才进入标准化记录。只有控制记录、没有用户可见消息的文件会标为 skipped，不创建空 Source；显式传入不存在或不是目录的 `--root` 会直接失败。需要保留旧的整快照行为时，显式传 `--no-incremental`。
 
 增量 Source 的 raw 快照保留证据边界，但不再接受物理重复无限增长。`ikb source compact-raw` 会先校验每个 raw hash，再对同内容快照使用 Copy-on-Write/硬链接，对同一逻辑会话的追加型快照共享不变前缀；Source ID、`rawPath`、normalized records 和账本均不变。报告写入 `governance/raw-dedup/`，重复运行幂等；每日维护在历史导入后自动执行。该命令依赖本机文件系统的 CoW 能力，若无法安全复用会保留原文件并报告问题，不静默删除证据。
 
@@ -179,7 +199,7 @@ node scripts/capture-elephant-browser.mjs \
 - `ingested`：已解析为正文/评论 Source，可以进入 Context 和分析；
 - `rejected` / `blocked`：明确不处理或缺少授权/范围信息。
 
-手工命令仍保留 `discovered → queued → ingested` 的显式状态；用户暂停批次时允许 `queued → discovered` 回到待处理队列。日常维护在用户授权后会自动把当前 scope 下的学城文档候选排队并读取，但默认限频：任意 30 分钟最多 10 篇，文档之间至少间隔 2 秒。每次真正发起读取前记录 `candidate.resolve_started`，失败也计入窗口；命令输出会返回已用额度、剩余额度和下一次可用时间。只有候选池里已经发现的明确 `contentId`/URL 会被读取，调用官方 `oa-skills citadel` 读取正文和评论；权限或密级不允许的文档进入 `blocked`，不会影响其他候选：
+手工命令仍保留 `discovered → queued → ingested` 的显式状态；用户暂停批次时允许 `queued → discovered` 回到待处理队列。日常维护在用户授权后会自动把当前 scope 下的学城文档候选排队并读取，但默认限频：任意 30 分钟最多 10 篇，文档之间至少间隔 30 秒。每次真正发起读取前记录 `candidate.resolve_started`，失败也计入窗口；命令输出会返回已用额度、剩余额度和下一次可用时间。只有候选池里已经发现的明确 `contentId`/URL 会被读取，调用官方 `oa-skills citadel` 读取正文和评论；权限或密级不允许的文档进入 `blocked`，不会影响其他候选：
 
 ```bash
 # 从已导入的 Agent/大象/文档 Source 中发现学城 URL/contentId
@@ -195,9 +215,9 @@ node scripts/capture-elephant-browser.mjs \
 ./bin/ikb candidate resolve <candidate-id>
 
 # 用户已授权时，维护流程按 30 分钟 10 篇限频读取；剩余候选留在池中
-./bin/ikb candidate resolve-all --scope work --limit 10 --delay-ms 2000
+./bin/ikb candidate resolve-all --scope work --limit 10 --delay-ms 30000
 # --limit 0 只表示本次不设候选数上限，仍受 30 分钟窗口约束
-./bin/ikb candidate resolve-all --scope work --limit 0 --delay-ms 2000
+./bin/ikb candidate resolve-all --scope work --limit 0 --delay-ms 30000
 ```
 
 `source search-citadel` 的搜索结果只作为候选证据，原始响应写入 `staging/citadel/search/`；`candidate discover` 只从明确的 URL、`contentId:` 和结构化 refs 提取，不把正文中提到的人名或普通数字误判为学城文档。候选重复按 scope、adapter、kind 和外部定位合并，新增来源/record 会追加 revision。`resolve`/`resolve-all` 成功后才产生 `document` 与 `review_comment` Source，并把它们写回候选的 `resolution.sourceIds`；读取失败只将候选标为 `blocked` 并记录原因，不会中断批次，也不会自动生成 Knowledge 或标记 `verified`。学城操作仍严格只读，不创建、编辑、评论或发送消息。
@@ -223,6 +243,14 @@ python3 scripts/pull-catpaw-memory.py --output ikb-data/staging/catpaw-memory/la
 
 非人物知识不直接做全文摘要。分析员先按类型生成 Knowledge Card：结论、证据链、推导、适用条件、执行/决策路径、例外/失败模式、验证方法、置信度依据和时间状态。`fact`、`decision`、`playbook`、`lesson`、`entity/concept`、`project/goal`、`synthesis` 使用不同的证据与升级标准；业务逻辑可以先以有边界的 medium/low draft 存在，只有真实任务验证或用户确认才升级为 verified。
 
+### Agent 会话到 Experience
+
+Agent 会话不会按“一个历史文件等于一次经验”处理。同一个 conversation 可能同时存在于多个历史根目录，也可能连续使用数天；Triage 先按 adapter 与 conversation ID 合并重复快照、按消息指纹去重，再在相邻消息超过 6 小时时切成独立工作 Episode。这样网页故障、取数纠偏和日志修复不会因为复用了同一个 Desk 会话而混成一条知识。分段算法有显式版本；算法变化后旧 Experience 保留为历史，但退出活动分析面。
+
+Triage 只负责找到值得深读的 Episode。自动化 Prompt、工具输出、评测题面和明确成功/否定错误先被确定性排除；剩余命中项进入有优先级队列。语义分析结果单独写入不可变 Analysis revision，事实、推断和未知项必须引用当前 Experience 内的精确 Source Record/Event。`gap` 表示证据不足，`skip` 表示没有新增长期价值，`candidate` 才允许携带新建、修订或退役建议。Source 内容变化时旧 Analysis 失效并回到队列，不静默沿用旧结论。
+
+新经验不能用普通维护 Run 的通过事件凑门槛：需要 3 个独立 Agent Episode，或 2 个 Episode 加一次绑定当前 Analysis 的哈希 Artifact 验证。单个直接反例可以形成修订现有 Knowledge 的 `pending_review` 候选，但 Curator 仍需做正文 diff、旧版本保留和准入验证，Candidate 自身不参与检索。
+
 ## CLI 与 Skill 边界
 
 当前可运行的本地 Source Slice：
@@ -231,12 +259,15 @@ python3 scripts/pull-catpaw-memory.py --output ikb-data/staging/catpaw-memory/la
 ikb source ingest session.jsonl --kind ai_conversation --scope work
 ikb source ingest design.md --kind document --scope work
 ikb source ingest review.md --kind review_comment --scope work
+ikb source target-list
+ikb source sync-targets
 ikb source list
+ikb source coverage --scope work --write
 ikb source context <source-id> --limit 100
 ikb people view <person-id> --scope work --limit 100
 ikb people rebuild --scope work --limit 100
 ```
 
-CLI 只提供确定性底座和运维入口：初始化、导入、状态、备份、诊断、时间线和 Context 导出。自然语言分析交给 Skill：Skill 负责选择范围、调用 Source Context、组织上下文、生成报告和知识候选；固定的数据格式、准入门槛、权限和账本写入仍由 Core 执行。
+CLI 只提供确定性底座和运维入口：初始化、来源登记、增量导入、来源覆盖账、状态、备份、诊断、时间线和 Context 导出。`source coverage --write` 把 Agent 会话分为已有 Source、确认无可见消息和真实欠账，同时对账收件箱、CatPaw 快照、学城候选、关键人物及大象目标；结果写入 `governance/<scope>/sources/coverage.{json,md}`。自然语言分析交给 Skill：Skill 负责选择范围、调用 Source Context、组织上下文、生成报告和知识候选；固定的数据格式、准入门槛、权限和账本写入仍由 Core 执行。
 
 当前 ikb 已实现本地 JSONL/Markdown Source 导入、统一增量状态、Claude Code/Codex/Desk 历史发现与增量导入、Elephant 批准导出和有界 `dx` CDP 桥接、学城文档及评论增量读取、学城搜索与输入候选池、人物发言视图、原始快照、归一化记录、Context 导出、文本/文件知识捕获和知识关系维护。大象网页抓取器本身仍是页面快照器；跨运行的浏览器 DOM 断点续读和无目标全量扫描不自动开启，外部写回仍需单独 Approval。

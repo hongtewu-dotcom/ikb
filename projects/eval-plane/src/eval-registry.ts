@@ -1,6 +1,7 @@
 import { harnessEvaluationCases } from "./harness-eval.ts";
 import { assertUniqueSuiteKey, DETERMINISTIC_GRADER_VERSION, EVAL_CASE_SCHEMA, EVAL_SUITE_SCHEMA, type EvalCase, type EvalSuite, validateEvalCase, validateEvalSuite } from "./eval-contract.ts";
 import { runAssessmentSuite } from "./run-assessment.ts";
+import { specxChangeQualitySuite } from "./specx-change-assessment.ts";
 import { workRunAssessmentSuite } from "./work-run-assessment.ts";
 
 export class EvalRegistry {
@@ -127,5 +128,7 @@ export function createDefaultEvalRegistry(): EvalRegistry {
   registry.register(assessment.suite, assessment.cases);
   const workAssessment = workRunAssessmentSuite();
   registry.register(workAssessment.suite, workAssessment.cases);
+  const specxAssessment = specxChangeQualitySuite();
+  registry.register(specxAssessment.suite, specxAssessment.cases);
   return registry;
 }

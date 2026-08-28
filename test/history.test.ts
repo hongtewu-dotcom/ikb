@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { discoverHistoryCandidates, ingestHistory } from "../src/history.ts";
@@ -152,6 +152,29 @@ test("history adapters keep tool output opt-in", () => {
   assert.match(deskToolRecord?.content ?? "", /safe-demo/);
 });
 
+test("history intake does not retain large tool-only rows when tools are excluded", () => {
+  const root = mkdtempSync(join(tmpdir(), "ikb-history-large-input-"));
+  const home = mkdtempSync(join(tmpdir(), "ikb-history-large-home-"));
+  const toolPayload = `tool-only-marker-${"x".repeat(2 * 1024 * 1024)}`;
+  writeFileSync(join(root, "large-codex.jsonl"), [
+    JSON.stringify({ timestamp: "2026-07-16T04:00:00Z", type: "session_meta", payload: { session_id: "codex-large", cwd: "/repo" } }),
+    JSON.stringify({ timestamp: "2026-07-16T04:01:00Z", type: "event_msg", payload: { type: "user_message", message: "Keep this user evidence." } }),
+    JSON.stringify({ timestamp: "2026-07-16T04:02:00Z", type: "event_msg", payload: { type: "custom_tool_call_output", output: toolPayload } }),
+  ].join("\n") + "\n");
+
+  const scan = ingestHistory(home, "codex", { root, scope: "work", includeTools: false });
+
+  assert.equal(scan.failed, 0);
+  assert.equal(scan.results[0].recordCount, 1);
+  const source = scan.results[0].source;
+  assert.ok(source);
+  assert.equal(source.rawStorage, "external");
+  assert.equal(source.rawPath, join(root, "large-codex.jsonl"));
+  assert.equal(statSync(source.recordsPath).size < 16 * 1024, true);
+  assert.equal(readFileSync(source.recordsPath, "utf8").includes("tool-only-marker"), false);
+  assert.equal(readSourceRecords(home, source.id)[0].content, "Keep this user evidence.");
+});
+
 test("Codex adapter keeps narrow assistant final-answer records and deduplicates exact event mirrors", () => {
   const root = mkdtempSync(join(tmpdir(), "ikb-codex-final-input-"));
   const home = mkdtempSync(join(tmpdir(), "ikb-codex-final-home-"));
@@ -227,6 +250,36 @@ test("history adapter skips files without user-visible messages", () => {
   assert.equal(scan.skipped, 1);
   assert.equal(scan.results[0].reason, "no messages");
   assert.equal(listSources(home).length, 0);
+});
+
+test("incremental history uses a file cursor before reparsing an unchanged session", () => {
+  const sandbox = mkdtempSync(join(tmpdir(), "ikb-history-cursor-"));
+  const home = join(sandbox, "ikb-data");
+  const root = join(sandbox, "codex");
+  mkdirSync(root, { recursive: true });
+  const path = join(root, "rollout.jsonl");
+  writeFileSync(path, [
+    JSON.stringify({ timestamp: "2026-08-07T00:00:00Z", type: "session_meta", payload: { session_id: "cursor-demo", cwd: "/repo" } }),
+    JSON.stringify({ timestamp: "2026-08-07T00:01:00Z", type: "event_msg", payload: { type: "user_message", message: "Keep the stable input." } }),
+    "",
+  ].join("\n"));
+
+  const first = ingestHistory(home, "codex", { root, scope: "work", limit: 0, incremental: true });
+  assert.equal(first.imported, 1);
+  assert.equal((first.results[0].incrementalState?.cursor as { version?: number })?.version, 2);
+  assert.equal((first.results[0].incrementalState?.cursor as { byteOffset?: number })?.byteOffset, first.results[0].candidate.size);
+  assert.equal(first.results[0].readBytes, first.results[0].candidate.size);
+
+  const second = ingestHistory(home, "codex", { root, scope: "work", limit: 0, incremental: true });
+  assert.equal(second.imported, 0);
+  assert.equal(second.skipped, 1);
+  assert.equal(second.results[0].reason, "unchanged-cursor");
+  assert.equal(second.results[0].source?.id, first.results[0].source?.id);
+
+  appendFileSync(path, `${JSON.stringify({ timestamp: "2026-08-07T00:02:00Z", type: "event_msg", payload: { type: "agent_message", message: "New visible result." } })}\n`);
+  const third = ingestHistory(home, "codex", { root, scope: "work", limit: 0, incremental: true });
+  assert.equal(third.imported, 1);
+  assert.equal(third.results[0].deltaCount, 1);
 });
 
 test("history scan rejects invalid scope before discovery or import", () => {

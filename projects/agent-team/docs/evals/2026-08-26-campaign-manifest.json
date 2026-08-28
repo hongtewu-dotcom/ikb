@@ -1,0 +1,39 @@
+{
+  "schema": "ikb-eval-campaign-v1",
+  "campaignId": "agent-team-2.0.0-controlled-r1",
+  "campaignVersion": "v1",
+  "dataset": {
+    "kind": "sealed_holdout",
+    "cohortHash": "c5e10edbd5867b8c0aedd13cf3a8891961e89a73821bbd5dcffc97c790bc990f",
+    "caseCount": 3,
+    "trialsPerCase": 1,
+    "strata": [
+      {
+        "id": "routing",
+        "caseCount": 3
+      }
+    ],
+    "minReportGroupSize": 2
+  },
+  "baseline": {
+    "id": "baseline",
+    "harnessRef": "artifact://agent-team/native-v1",
+    "configHash": "a73a61a1e3e312e6e44d438b734543942239cdff4a3a90fa15762fa0addd0131"
+  },
+  "candidate": {
+    "id": "candidate",
+    "harnessRef": "artifact://agent-team/2.0.0-b3b5e673",
+    "configHash": "b3b5e673f22a752526dca07a998575351aa03c2f7ebabb453424987292c8d8e9"
+  },
+  "controlHash": "3b33e3e08cdc48b77f3de3bdf0479b2a5d725bbada6be960f5c357de063bcdb5",
+  "policy": {
+    "minPairedCases": 3,
+    "maxCandidateL1Failures": 0,
+    "minL3Improvement": 0.1,
+    "confidenceLevel": 0.95,
+    "maxStratumL3Regression": 0,
+    "maxTokenIncreaseRatio": 0.2,
+    "maxWallTimeIncreaseRatio": 0.2,
+    "maxManualInterventionIncrease": 0
+  }
+}

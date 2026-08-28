@@ -137,7 +137,7 @@ export function handleCandidate(store: LedgerStore, home: string, action: string
       const limitText = optionalOption(parsed, "limit");
       const delayText = optionalOption(parsed, "delay-ms");
       const limit = Number(limitText ?? "10");
-      const delayMs = Number(delayText ?? "2000");
+      const delayMs = Number(delayText ?? "30000");
       const dryRun = parsed.options["dry-run"] === true;
       assertValue(Number.isInteger(limit) && limit >= 0, "--limit must be an integer >= 0 (0 means drain pending candidates within the rate window)");
       assertValue(Number.isInteger(delayMs) && delayMs >= 0, "--delay-ms must be an integer >= 0");

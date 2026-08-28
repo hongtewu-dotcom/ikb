@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { findKeyPerson, type KeyPerson } from "./people.ts";
-import { resolveVault } from "./layout.ts";
+import { resolvePeopleRoot } from "./layout.ts";
 import { listSources, readSourceRecords } from "./source.ts";
+import { writePersonEvidenceSnapshot } from "./person-evidence.ts";
 import type { SourceMessage, SourceRecord } from "./types.ts";
 
 export interface PersonViewOptions {
@@ -89,10 +90,49 @@ export interface PersonDossierEntry {
   participants: string[];
 }
 
+export interface PersonEpisodeRecord {
+  sourceId: string;
+  sourceKind: string;
+  adapter: string;
+  recordId: string;
+  timestamp: string;
+  actor: string;
+  attributionKinds: PersonAttributionKind[];
+  contentExcerpt: string;
+  contentHash: string;
+  refs: string[];
+}
+
+export interface PersonEvidenceEpisode {
+  episodeKey: string;
+  startedAt: string;
+  finishedAt: string;
+  sourceIds: string[];
+  sourceKinds: string[];
+  adapters: string[];
+  conversationIds: string[];
+  attributionKinds: PersonAttributionKind[];
+  records: PersonEpisodeRecord[];
+}
+
+export interface PersonEpisodeIndex {
+  schema: "ikb-person-episode-index.v1";
+  personId: string;
+  name: string;
+  scope: "personal" | "work";
+  generatedAt: string;
+  fingerprint: string;
+  directRecordCount: number;
+  episodeCount: number;
+  episodes: PersonEvidenceEpisode[];
+}
+
 export interface PersonDossierResult {
   person: KeyPerson;
   scope: "personal" | "work";
   path: string;
+  episodeIndexPath: string;
+  episodeCount: number;
   generatedAt: string;
   sourceCount: number;
   matchedSourceCount: number;
@@ -104,8 +144,20 @@ export interface PersonDossierResult {
   duplicateCount: number;
   returnedCount: number;
   truncated: boolean;
+  evidenceMetrics: {
+    directEpisodeKeys: string[];
+    independentSourceKeys: string[];
+    distinctDates: string[];
+    sourceKinds: string[];
+    sourceIds: string[];
+  };
   sources: PersonDossierSource[];
   entries: PersonDossierEntry[];
+}
+
+interface PersonDossierBuildResult {
+  dossier: PersonDossierResult;
+  episodeIndex: PersonEpisodeIndex;
 }
 
 export interface PersonDossierBatchResult {
@@ -116,6 +168,8 @@ export interface PersonDossierBatchResult {
   sourceCount: number;
   sourceReadCount: number;
   scannedRecordCount: number;
+  quotedReplyRepairedCount: number;
+  quotedReplyExcludedCount: number;
   results: PersonDossierResult[];
 }
 
@@ -123,6 +177,14 @@ interface PersonDossierCorpus {
   scope: "personal" | "work";
   sources: Array<{ source: SourceRecord; records: SourceMessage[] }>;
   scannedRecordCount: number;
+  quotedReplyRepairedCount: number;
+  quotedReplyExcludedCount: number;
+}
+
+interface PersonEvidenceProjectionResult {
+  records: SourceMessage[];
+  quotedReplyRepairedCount: number;
+  quotedReplyExcludedCount: number;
 }
 
 interface PersonRecordView {
@@ -213,9 +275,9 @@ export function buildElephantPersonView(home: string, options: PersonViewOptions
 }
 
 export function writePersonDossier(home: string, personId: string, options: Omit<PersonDossierOptions, "personId"> = {}): PersonDossierResult {
-  const result = buildPersonDossier(home, { ...options, personId });
+  const result = buildPersonDossierBundle(home, { ...options, personId });
   writePersonDossierResult(home, result);
-  return result;
+  return result.dossier;
 }
 
 export function writePersonDossiers(
@@ -246,7 +308,7 @@ export function writePersonDossiers(
     if (!corpus) throw new Error(`Person dossier corpus not loaded for scope ${person.scope}`);
     const result = buildPersonDossierFromCorpus(home, person, corpus, { from, to, limit, generatedAt });
     writePersonDossierResult(home, result);
-    return result;
+    return result.dossier;
   });
   const sourceCount = [...corpora.values()].reduce((sum, corpus) => sum + corpus.sources.length, 0);
   return {
@@ -257,21 +319,65 @@ export function writePersonDossiers(
     sourceCount,
     sourceReadCount: sourceCount,
     scannedRecordCount: [...corpora.values()].reduce((sum, corpus) => sum + corpus.scannedRecordCount, 0),
+    quotedReplyRepairedCount: [...corpora.values()].reduce((sum, corpus) => sum + corpus.quotedReplyRepairedCount, 0),
+    quotedReplyExcludedCount: [...corpora.values()].reduce((sum, corpus) => sum + corpus.quotedReplyExcludedCount, 0),
     results,
   };
 }
 
-function writePersonDossierResult(home: string, result: PersonDossierResult): void {
-  const vault = resolveVault(home, result.scope);
-  const dossierDirectory = join(vault, "people", result.person.id);
-  ensurePrivateDirectory(vault);
-  ensurePrivateDirectory(join(vault, "people"));
+function writePersonDossierResult(home: string, build: PersonDossierBuildResult): void {
+  const result = build.dossier;
+  const peopleRoot = resolvePeopleRoot(home, result.scope);
+  const dossierDirectory = join(peopleRoot, result.person.id);
+  ensurePrivateDirectory(peopleRoot);
   ensurePrivateDirectory(dossierDirectory);
+  ensurePrivateDirectory(dirname(result.episodeIndexPath));
   writeFileSync(result.path, renderPersonDossier(result), { mode: 0o600 });
   chmodSync(result.path, 0o600);
+  if (!existsSync(result.episodeIndexPath)) {
+    writeFileSync(result.episodeIndexPath, `${JSON.stringify(build.episodeIndex, null, 2)}\n`, { mode: 0o600 });
+  } else {
+    const existing = JSON.parse(readFileSync(result.episodeIndexPath, "utf8")) as Partial<PersonEpisodeIndex>;
+    if (existing.fingerprint !== build.episodeIndex.fingerprint || existing.personId !== build.episodeIndex.personId || existing.scope !== build.episodeIndex.scope) {
+      throw new Error(`Person Episode index fingerprint collision: ${result.episodeIndexPath}`);
+    }
+  }
+  chmodSync(result.episodeIndexPath, 0o600);
+  rebuildPersonProjectionIndex(home, result.scope);
+  writePersonEvidenceSnapshot(home, {
+    personId: result.person.id,
+    name: result.person.name ?? result.person.id,
+    scope: result.scope,
+    generatedAt: result.generatedAt,
+    matchedCount: result.matchedCount,
+    directMatchedCount: result.directMatchedCount,
+    contextMatchedCount: result.contextMatchedCount,
+    ...result.evidenceMetrics,
+    attributionCounts: result.attributionCounts,
+  });
+}
+
+function rebuildPersonProjectionIndex(home: string, scope: string): string {
+  const peopleRoot = resolvePeopleRoot(home, scope);
+  ensurePrivateDirectory(peopleRoot);
+  const people = readdirSync(peopleRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && existsSync(join(peopleRoot, entry.name, "index.md")))
+    .map((entry) => entry.name)
+    .sort();
+  const path = join(peopleRoot, "index.md");
+  const rows = people.length > 0
+    ? people.map((id) => `- [[${id}/index|${id}]]`).join("\n")
+    : "_No person views yet._";
+  writeFileSync(path, `# People\n\n> Generated by ikb. This is a rebuildable evidence view, not Knowledge.\n\n${rows}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
 }
 
 export function buildPersonDossier(home: string, options: PersonDossierOptions): PersonDossierResult {
+  return buildPersonDossierBundle(home, options).dossier;
+}
+
+function buildPersonDossierBundle(home: string, options: PersonDossierOptions): PersonDossierBuildResult {
   const person = findKeyPerson(home, options.personId);
   if (!person) throw new Error(`Key person not found: ${options.personId}`);
   const requestedScope = normalizeScope(options.scope ?? person.scope);
@@ -292,14 +398,114 @@ export function buildPersonDossier(home: string, options: PersonDossierOptions):
 }
 
 function loadPersonDossierCorpus(home: string, scope: "personal" | "work"): PersonDossierCorpus {
+  let scannedRecordCount = 0;
+  let quotedReplyRepairedCount = 0;
+  let quotedReplyExcludedCount = 0;
   const sources = listSources(home)
     .filter((source) => source.scope === scope)
-    .map((source) => ({ source, records: readSourceRecords(home, source.id, { verifyRaw: false, source }) }));
+    .map((source) => {
+      const records = readSourceRecords(home, source.id, { verifyRaw: false, source });
+      scannedRecordCount += records.length;
+      const projection = projectPersonEvidenceRecords(source, records);
+      quotedReplyRepairedCount += projection.quotedReplyRepairedCount;
+      quotedReplyExcludedCount += projection.quotedReplyExcludedCount;
+      return { source, records: projection.records };
+    });
   return {
     scope,
     sources,
-    scannedRecordCount: sources.reduce((sum, entry) => sum + entry.records.length, 0),
+    scannedRecordCount,
+    quotedReplyRepairedCount,
+    quotedReplyExcludedCount,
   };
+}
+
+function projectPersonEvidenceRecords(source: SourceRecord, records: SourceMessage[]): PersonEvidenceProjectionResult {
+  if (source.adapter !== "elephant-browser" || source.format !== "jsonl") {
+    return { records, quotedReplyRepairedCount: 0, quotedReplyExcludedCount: 0 };
+  }
+  const rawByMessageId = new Map<string, Record<string, unknown>>();
+  try {
+    for (const line of readFileSync(source.rawPath, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      const value = JSON.parse(line) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const row = value as Record<string, unknown>;
+      for (const key of ["id", "mid", "messageId", "uuid"] as const) {
+        const candidate = stringValue(row[key]);
+        if (candidate && !rawByMessageId.has(candidate)) rawByMessageId.set(candidate, row);
+      }
+    }
+  } catch {
+    return { records, quotedReplyRepairedCount: 0, quotedReplyExcludedCount: 0 };
+  }
+
+  let quotedReplyRepairedCount = 0;
+  let quotedReplyExcludedCount = 0;
+  const projected = records.flatMap((record) => {
+    const messageId = record.refs.find((ref) => ref.startsWith("messageId:"))?.slice("messageId:".length);
+    const raw = messageId ? rawByMessageId.get(messageId) : undefined;
+    if (!raw) return [record];
+    const repair = repairQuotedReply(record, raw);
+    if (repair === null) {
+      quotedReplyExcludedCount += 1;
+      return [];
+    }
+    if (repair === record.content) return [record];
+    quotedReplyRepairedCount += 1;
+    return [{
+      ...record,
+      content: repair,
+      refs: [...new Set([...record.refs, "person-attribution:quoted-reply-suffix"])],
+    }];
+  });
+  return { records: projected, quotedReplyRepairedCount, quotedReplyExcludedCount };
+}
+
+function repairQuotedReply(record: SourceMessage, raw: Record<string, unknown>): string | null {
+  const rawText = stringValue(raw.raw_text) ?? stringValue(raw.rawText);
+  const capturedContent = stringValue(raw.content) ?? record.content.trim();
+  if (!rawText || !capturedContent) return record.content;
+  const contentIndex = rawText.indexOf(capturedContent);
+  if (contentIndex < 0) return record.content;
+  const prefixLine = rawText.slice(0, contentIndex).trimEnd().split("\n").at(-1)?.trim() ?? "";
+  const quotedActor = prefixLine.match(/^([^：:\n]{1,40})[：:]$/u)?.[1]?.trim();
+  if (!quotedActor || samePersonLabel(quotedActor, record.actor)) return record.content;
+
+  const suffix = rawText.slice(contentIndex + capturedContent.length).trim();
+  if (!suffix) return null;
+  const ownReply = extractOwnReply(suffix, record.actor);
+  return ownReply || null;
+}
+
+function extractOwnReply(value: string, actor: string): string {
+  const lines = value.replace(/^展开\s*/u, "").trim().split("\n");
+  const normalizedActor = normalizePersonLabel(actor);
+  const result: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let line = lines[index]?.trimEnd() ?? "";
+    const speaker = line.match(/^([\p{L}\p{N}_.-]{1,24})[：:]\s*(.*)$/u);
+    if (speaker) {
+      const label = normalizePersonLabel(speaker[1] ?? "");
+      if (index === 0 && label === normalizedActor) line = speaker[2] ?? "";
+      else if (label !== normalizedActor && label !== "http" && label !== "https") break;
+      else if (label === normalizedActor) line = speaker[2] ?? "";
+    }
+    result.push(line);
+  }
+  return result.join("\n").trim();
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function samePersonLabel(left: string, right: string): boolean {
+  return Boolean(normalizePersonLabel(left)) && normalizePersonLabel(left) === normalizePersonLabel(right);
+}
+
+function normalizePersonLabel(value: string): string {
+  return value.normalize("NFKC").trim().toLocaleLowerCase("en-US").replace(/[\s()（）·._-]+/gu, "");
 }
 
 function buildPersonDossierFromCorpus(
@@ -307,7 +513,7 @@ function buildPersonDossierFromCorpus(
   person: KeyPerson,
   corpus: PersonDossierCorpus,
   options: { from?: number; to?: number; limit: number; generatedAt: string },
-): PersonDossierResult {
+): PersonDossierBuildResult {
   const identities = personIdentities(person);
   const sourceViews: PersonDossierSource[] = [];
   const uniqueEntries = new Map<string, PersonDossierEntry>();
@@ -319,6 +525,7 @@ function buildPersonDossierFromCorpus(
     let contextMatchedCount = 0;
     const sourceAttributionCounts = emptyAttributionCounts();
     records.forEach((record) => {
+      if (!isUsefulPersonEvidence(record)) return;
       const match = !inTimeRange(record, options.from, options.to) ? null : classifyPersonMatch(record, identities);
       if (!match) return;
       matchedCount += 1;
@@ -356,12 +563,16 @@ function buildPersonDossierFromCorpus(
   }
 
   const entries = [...uniqueEntries.values()].sort(compareDossierEntries);
+  const directEntries = entries.filter((entry) => entry.matchKind === "direct");
   const selected = entries.slice(0, options.limit);
-  const vault = resolveVault(home, corpus.scope);
-  return {
+  const peopleRoot = resolvePeopleRoot(home, corpus.scope);
+  const episodeIndex = buildPersonEpisodeIndex(person, corpus.scope, options.generatedAt, directEntries);
+  const dossier: PersonDossierResult = {
     person: { ...person, aliases: [...person.aliases] },
     scope: corpus.scope,
-    path: join(vault, "people", person.id, "index.md"),
+    path: join(peopleRoot, person.id, "index.md"),
+    episodeIndexPath: join(peopleRoot, person.id, "episodes", `${episodeIndex.fingerprint}.json`),
+    episodeCount: episodeIndex.episodeCount,
     generatedAt: options.generatedAt,
     sourceCount: corpus.sources.length,
     matchedSourceCount: sourceViews.length,
@@ -373,9 +584,125 @@ function buildPersonDossierFromCorpus(
     duplicateCount: candidateCount - uniqueEntries.size,
     returnedCount: selected.length,
     truncated: uniqueEntries.size > selected.length,
+    evidenceMetrics: {
+      directEpisodeKeys: unique(directEntries.map(structuralEpisodeKey)),
+      independentSourceKeys: unique(directEntries.map(independentEvidenceSourceKey)),
+      distinctDates: unique(directEntries.map((entry) => validDate(entry.timestamp)).filter((value): value is string => Boolean(value))),
+      sourceKinds: unique(directEntries.map((entry) => entry.sourceKind)),
+      sourceIds: unique(directEntries.map((entry) => entry.sourceId)),
+    },
     sources: sourceViews,
     entries: selected,
   };
+  return { dossier, episodeIndex };
+}
+
+function buildPersonEpisodeIndex(
+  person: KeyPerson,
+  scope: "personal" | "work",
+  generatedAt: string,
+  directEntries: PersonDossierEntry[],
+): PersonEpisodeIndex {
+  const groups = new Map<string, PersonDossierEntry[]>();
+  for (const entry of directEntries) {
+    const key = structuralEpisodeKey(entry);
+    const group = groups.get(key) ?? [];
+    group.push(entry);
+    groups.set(key, group);
+  }
+  const episodes = [...groups.entries()].map(([episodeKey, group]) => {
+    const ordered = [...group].sort(compareEpisodeRecords);
+    const timestamps = ordered.map((entry) => entry.timestamp).filter(Boolean);
+    return {
+      episodeKey,
+      startedAt: timestamps[0] ?? "",
+      finishedAt: timestamps.at(-1) ?? "",
+      sourceIds: unique(ordered.map((entry) => entry.sourceId)),
+      sourceKinds: unique(ordered.map((entry) => entry.sourceKind)),
+      adapters: unique(ordered.map((entry) => entry.adapter)),
+      conversationIds: unique(ordered.map((entry) => entry.conversationId)),
+      attributionKinds: sortAttributionKinds(ordered.flatMap((entry) => entry.attributionKinds)),
+      records: ordered.map(toEpisodeRecord),
+    } satisfies PersonEvidenceEpisode;
+  }).sort((left, right) => right.finishedAt.localeCompare(left.finishedAt) || left.episodeKey.localeCompare(right.episodeKey));
+  const fingerprintInput = { personId: person.id, scope, directRecordCount: directEntries.length, episodes };
+  return {
+    schema: "ikb-person-episode-index.v1",
+    personId: person.id,
+    name: person.name ?? person.id,
+    scope,
+    generatedAt,
+    fingerprint: createHash("sha256").update(JSON.stringify(fingerprintInput)).digest("hex"),
+    directRecordCount: directEntries.length,
+    episodeCount: episodes.length,
+    episodes,
+  };
+}
+
+function compareEpisodeRecords(left: PersonDossierEntry, right: PersonDossierEntry): number {
+  return left.timestamp.localeCompare(right.timestamp)
+    || left.sourceId.localeCompare(right.sourceId)
+    || left.recordId.localeCompare(right.recordId);
+}
+
+function toEpisodeRecord(entry: PersonDossierEntry): PersonEpisodeRecord {
+  return {
+    sourceId: entry.sourceId,
+    sourceKind: entry.sourceKind,
+    adapter: entry.adapter,
+    recordId: entry.recordId,
+    timestamp: entry.timestamp,
+    actor: entry.actor,
+    attributionKinds: [...entry.attributionKinds],
+    contentExcerpt: boundedEpisodeExcerpt(entry.content),
+    contentHash: createHash("sha256").update(entry.content).digest("hex"),
+    refs: [...entry.refs],
+  };
+}
+
+function boundedEpisodeExcerpt(content: string): string {
+  const characters = [...stripCitadelReadOnlyBanner(content).trim()];
+  return characters.length <= 1200 ? characters.join("") : `${characters.slice(0, 1200).join("")}\n[…Episode 摘录已截断；按 Source/record 读取全文…]`;
+}
+
+function stripCitadelReadOnlyBanner(content: string): string {
+  const trimmed = content.trimStart();
+  const header = trimmed.slice(0, 1200);
+  if (!header.startsWith(">") || !header.includes("不可直接用于 createDocument")) return content;
+  const lines = trimmed.split("\n");
+  let index = 0;
+  while (index < lines.length && (lines[index]?.trim().startsWith(">") || !lines[index]?.trim())) index += 1;
+  if (lines[index]?.trim() === "---") index += 1;
+  while (index < lines.length && !lines[index]?.trim()) index += 1;
+  return lines.slice(index).join("\n");
+}
+
+function structuralEpisodeKey(entry: PersonDossierEntry): string {
+  const stableRef = entry.refs.find((ref) => /^(?:rootCommentId|commentId|contentId|messageId|uuid|mid):/i.test(ref));
+  if (entry.sourceKind === "document" && stableRef) return shortHash(`${entry.sourceKind}|${stableRef}`);
+  if (entry.sourceKind === "review_comment" && stableRef) return shortHash(`${entry.sourceKind}|${entry.conversationId}|${stableRef}`);
+  const timestamp = Date.parse(entry.timestamp);
+  const bucket = Number.isFinite(timestamp) ? Math.floor(timestamp / (30 * 60 * 1000)) : entry.timestamp;
+  return shortHash(`${entry.sourceKind}|${normalizeConversationId(entry.conversationId)}|${bucket}`);
+}
+
+function independentEvidenceSourceKey(entry: PersonDossierEntry): string {
+  const contentId = entry.refs.find((ref) => /^contentId:/i.test(ref));
+  if (contentId) return shortHash(`${entry.adapter}|${entry.sourceKind}|${contentId}`);
+  return shortHash(`${entry.adapter}|${entry.sourceKind}|${normalizeConversationId(entry.conversationId)}`);
+}
+
+function validDate(value: string): string | null {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 10) : null;
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))].sort();
 }
 
 function normalizeSelector(options: PersonViewOptions): PersonSelector {
@@ -583,6 +910,7 @@ function renderPersonDossier(result: PersonDossierResult): string {
     `- Attribution roles: ${formatAttributionCounts(result.attributionCounts)}`,
     `- Duplicates removed: ${result.duplicateCount}`,
     `- Records shown: ${result.returnedCount}${result.truncated ? " (truncated; use --limit to expand)" : ""}`,
+    `- Direct episodes indexed: ${result.episodeCount} ([complete index](${relative(dirname(result.path), result.episodeIndexPath).replaceAll("\\", "/")}))`,
     "",
     "## Evidence sources",
     "",
@@ -616,7 +944,7 @@ function renderPersonDossier(result: PersonDossierResult): string {
       `- Participants: ${entry.participants.join(", ") || "unknown"}`,
       `- Refs: ${entry.refs.join(", ") || "none"}`,
       "",
-      ...quoteMarkdown(entry.content),
+      ...quoteMarkdown(compactEvidenceContent(entry)),
       "",
     );
   });
@@ -625,6 +953,21 @@ function renderPersonDossier(result: PersonDossierResult): string {
 
 function quoteMarkdown(value: string): string[] {
   return value.split("\n").map((line) => `> ${line}`);
+}
+
+function compactEvidenceContent(entry: PersonDossierEntry): string {
+  const withoutCitadelBanner = entry.content.replace(/^>\s*⚠️[\s\S]*?\n---\s*/u, "").trim();
+  const content = withoutCitadelBanner || entry.content.trim();
+  const limit = entry.matchKind === "context" ? 400 : entry.sourceKind === "document" ? 900 : entry.sourceKind === "review_comment" ? 1200 : 800;
+  const characters = [...content];
+  if (characters.length <= limit) return content;
+  return `${characters.slice(0, limit).join("").trimEnd()}\n\n[…摘录已截断；完整内容见上方 Source records…]`;
+}
+
+function isUsefulPersonEvidence(record: SourceMessage): boolean {
+  const content = record.content.trim();
+  if (!content) return false;
+  return !/^\[(?:非文本消息|图片|文件|视频|语音|表情|链接卡片)\]$/u.test(content);
 }
 
 function formatAttributionCounts(counts: Record<PersonAttributionKind, number>): string {

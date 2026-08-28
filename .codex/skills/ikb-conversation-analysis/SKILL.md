@@ -21,7 +21,7 @@ If the source is not available, state the missing adapter or export. Do not repl
 
 ## Evidence workflow
 
-1. Retrieve the smallest relevant set of messages, document versions, comments, and Run artifacts. For an imported Source, call `./bin/ikb source context <source-id> --limit <n>` and use the returned record IDs as citations.
+1. Retrieve the smallest relevant set of messages, document versions, comments, and Run artifacts. When analyzing an Experience Record, call `./bin/ikb experience context <experience-id> --run <run-id>` first: it expands only the records frozen into that Episode, marks the Triage evidence rows, and registers a hashed Context Artifact. Do not substitute the whole Source session. For a Source that has not entered Triage, call `./bin/ikb source context <source-id> --limit <n>` and use the returned record IDs as citations.
    If a selected record contains an explicit `km.sankuai.com` URL or `contentId`, run `./bin/ikb candidate discover <source-id>` (or use the automatic discovery result from Source intake). Treat the result as an Input Candidate; do not read the linked document until it is explicitly `queued` and resolved.
 2. Preserve `source_id`, `conversation_id`, `message_id`, `document_id`, `revision_id`, URL/path, author, timestamp, and line/location references.
 3. Group related items into Episodes. Keep separate conversations separate unless a shared identifier or explicit evidence joins them.
@@ -31,14 +31,15 @@ If the source is not available, state the missing adapter or export. Do not repl
 7. Give every analyzed source or source group an explicit knowledge disposition: `admit` when it supports at least one durable claim, otherwise `skip` with a reason. Do not use source length or a one-candidate-per-document quota as a proxy for value.
 8. Return the report with citations before proposing any knowledge candidate. `candidate_knowledge: []` is a valid successful result.
 
-For a frozen or batch extraction, write one `ikb-knowledge-compilation-result.v2` object per case. Do not start from a candidate card. Start with hashed evidence excerpts, then facts, coverage obligations, claims, and typed consumer products:
+For a frozen or batch extraction, write one `ikb-knowledge-compilation-result.v3` object per case. Do not start from a candidate card or a summary. First freeze the Source structure, independent reference facts, consumer questions, and current canonical Knowledge; then produce evidence, facts, claims, and typed consumer products:
 
 ```bash
+./bin/ikb extraction inventory <source.md> --source-id <source-id> --file <source-inventory.json> --json
 ./bin/ikb extraction validate <results.json> --manifest <benchmark-manifest.json> --json
-./bin/ikb extraction verify <results.json> --manifest <benchmark-manifest.json> --json
+./bin/ikb extraction verify <results.json> --manifest <benchmark-manifest.json> --file <information-loss-report.json> --json
 ```
 
-The v2 manifest must freeze independent coverage obligations before extraction. `validate` checks the producer contract; `verify` checks evidence integrity, core coverage, fact-backed claims, type shape, and person selectivity. A core obligation marked `omitted` or `unknown` blocks `admit`; retain the available facts and a Gap instead. If either command fails, fix the compilation; do not create or update Knowledge.
+The v3 manifest must freeze every source unit, independent reference fact, consumer question, existing `canonical_key` owner, and coverage obligation before extraction. Every source unit and reference fact needs one explicit disposition; every core question needs an answer linked to facts and a product. `validate` checks the producer contract; `verify` recomputes Source completeness, P0/P1 fact retention, claim support, question coverage, conflict exposure, semantic loss, and minimal sufficiency. A lost/unresolved core fact, unsupported claim, unanswered core question, duplicate canonical key, or dominated product blocks `admit`. If either command fails, fix the compilation; do not create or update Knowledge. V2 results remain auditable but are not publishable.
 
 Before handing a batch of drafts to a human, run the global reasoning compression layer:
 
@@ -48,7 +49,7 @@ Before handing a batch of drafts to a human, run the global reasoning compressio
 
 Keep every original confirmation item in the Draft/Artifact for replay, but classify it as `auto_resolved`, `defer_until_task`, or `ask_user`. Do not ask the user about an existing boundary (for example, example numbers are not production thresholds, local drafts do not write external systems) or a current-evidence gap that belongs to a future Task. Only person identity/recurrence/use, high-risk Approval or blocking rules, external side effects, and choices that evidence cannot determine enter the compressed user decision queue.
 
-For non-person knowledge, preserve a complete fact inventory before producing a consumer view. A consumer view may be atomic, but it must cite `fact_refs` in the compilation and must not replace source objects, relations, states, numbers, or boundaries with a generic method. Use `quality_version: 4` for new Knowledge. Set `product_type`, `compilation_ref`, `fact_refs`, and `questions_answered`. Only `playbook` requires ordered `use_steps`, checks, rollback, and stop conditions. `architecture_map` requires explicit nodes/edges/version/state; `domain_pack` requires entities/relations/rules/states; `entity_card` requires fields/relations/lifecycle/invariants; `flow_card` requires trigger/nodes/edges/exceptions/recovery; `decision_card` requires context/options/choice/state/rationale/rejected/impact. Confidence is evidence strength, not probability; `verified` still requires the configured verification path.
+For non-person knowledge, preserve a complete fact inventory before producing a consumer view. A consumer view may be atomic, but it must cite `fact_refs` in the compilation and must not replace source objects, relations, states, numbers, or boundaries with a generic method. New publishable Knowledge uses `quality_version: 5`; QV4 remains readable legacy. Set `product_type`, `canonical_key`, `compilation_schema`, `compilation_case_id`, `compilation_product_id`, `extraction_manifest_ref`, `compilation_ref`, `information_loss_ref`, `fact_refs`, and `questions_answered`. Only `playbook` requires ordered steps, checks, rollback, and stop conditions. `architecture_map` requires explicit nodes/edges/version/state; `domain_pack` requires entities/relations/rules/states; `entity_card` requires fields/relations/lifecycle/invariants; `flow_card` requires trigger/nodes/edges/exceptions/recovery; `decision_card` requires context/options/choice/state/rationale/rejected/impact. Confidence is evidence strength, not probability; `verified` still requires the configured verification path.
 
 When a source has real business structure (business model, protocol, architecture, flow, SOP, review, or roadmap), produce a **business extraction package** before proposing Knowledge. The package is an indexed evidence artifact, not a long abstract, and may contain empty sections when the source does not support them:
 
@@ -101,7 +102,7 @@ For a key person across sources, use `./bin/ikb people view <person-id> --scope 
 
 Read the dossier's `Attribution` field literally. `speaker`, `author`, `creator`, `owner`, and `modifier` are different evidence roles; `record_actor` means the adapter exposed an actor without enough role semantics; `context` is not attribution. A modifier may support a review/revision Episode but never proves sole authorship or ownership. If creator/owner/modifier disagree, preserve all roles in the Artifact and phrase the claim at the narrowest supported level.
 
-The evidence view is only the first half of person extraction. Source intake is incremental; do not rebuild or distill a person after every record. At an intake checkpoint (or the scheduled daily evidence-view job), rebuild the deterministic dossier once for the affected scope. A batch rebuild must scan normalized Sources once per scope and distribute records to every selected person; do not rescan the corpus once per person. When a dossier is truncated, authored/owned/modified documents and review comments come first, then direct speech, then context-only records. Run person analysis/consolidation on a weekly window, or sooner only when there are at least three new direct episodes, two independent new Sources, or an explicit user request. The Artifact must compare the previous analysis window with the new evidence and report `added`, `unchanged`, `superseded`, `conflicted`, and `unknown` observations rather than silently replacing a profile.
+The evidence view is only the first half of person extraction. Source intake is incremental; do not rebuild or distill a person after every record. At an intake checkpoint (or the scheduled daily evidence-view job), rebuild the deterministic dossier once for the affected scope. A batch rebuild must scan normalized Sources once per scope and distribute records to every selected person; do not rescan the corpus once per person. `index.md` is a bounded readable projection; the same rebuild also writes `episodes.json`, a complete index of every directly attributed Episode with exact Source/record refs, hashes, and bounded excerpts. Context-only records never enter that index. When the readable dossier is truncated, authored/owned/modified documents and review comments come first, then direct speech, then context-only records, but counterevidence and temporal analysis must still cover the complete `episodes.json` window. Run person analysis/consolidation on a weekly window, or sooner only when there are at least three new direct episodes, two independent new Sources, or an explicit user request. The Artifact must compare the previous analysis window with the new evidence and report `added`, `unchanged`, `superseded`, `conflicted`, and `unknown` observations rather than silently replacing a profile. An unchanged evidence fingerprint must not trigger a new consolidation merely because the dossier was rebuilt at a later time.
 
 - identity: MIS, UID, display name, aliases, and the exact identity evidence used;
 - episodes: dated document, review, chat, or Agent episodes in which the person authored, decided, objected, owned, or supplied evidence;
@@ -169,7 +170,21 @@ Prefer decisions, failures, corrections, and verified outcomes over repeated raw
 
 Daily incremental intake and semantic analysis are separate steps. `./bin/ikb experience triage --scope work --adapter all` is a bounded pre-filter: it does not read complete tool output by default, does not produce Knowledge, and only queues sessions with a deterministic signal (an actually observed failure/block/retry, human correction, verifier rejection, non-obvious fix, `partial`/`incorrect` Knowledge feedback, or an explicit new decision/rule). Runtime/automation envelopes, embedded tool call/results, imported session markers, role-assignment prompts, ordinary task instructions, knowledge-evaluation subjects, explicit success/negation, and conditional descriptions such as “if the request fails” are not events. A previously queued record that becomes prompt-only after a rule correction is reconciled to `triageDisposition=ignored` and excluded from clustering; an Experience whose Source has left the active analysis plane is likewise reconciled to `ignored/source_outside_active_plane` without deleting the Source. Never preserve a false signal merely because its JSON already exists. Treat each selected item as an Experience Record with source/record/event/run references; it is a high-recall analysis queue, not a conclusion, so do not turn the signal label into a claim.
 
-Weekly clustering may create a `pending_review` Knowledge Candidate only when the same pattern has 3 independent Runs, or 2 independent Runs plus one real verification/evaluation pass. If the Source-to-Run mapping is absent, keep the item in the analysis queue and do not count it as an independent Run. The Analyst must still read the cited evidence and produce a v2 Compilation with coverage, fact-backed claims, a type-specific consumer view, validation, confidence, and temporal state before Curator admission. A candidate is not retrievable Knowledge and must not be marked verified automatically.
+`partial`/`incorrect` feedback may have no Source record because it is emitted by a real consumer Run. Triage may create an event-backed Experience only when the feedback is bound to an existing target Knowledge, a same-scope Task/Run, and at least one registered Artifact from that Run. Its Context exposes only the feedback metadata, target Knowledge metadata, Run/Task IDs, and the Artifact path/hash for local verification; it never copies the Artifact body into the Experience. Event-only evidence may propose `revise` or `retire` for that exact target Knowledge, but it must not create unrelated new Knowledge. A complementary capability gap from one feedback stays `skip` or `gap` until independent Source/Episode evidence satisfies the normal candidate threshold.
+
+Recording `partial` or `incorrect` feedback requires `--evidence <artifact-id>` from the same consumer Run. If legacy malformed feedback is followed by a corrected event for the same Knowledge and Run, Triage uses only the latest event; it must not create one mapped and one orphan Experience. A `revise` proposal must preserve the target Knowledge's exact `type` and `collection`. Supported Candidate types are `architecture`, `decision`, `entity`, `fact`, `goal`, `lesson`, `playbook`, `preference`, and `synthesis`; collections are the eight Vault directories. If the target or grouped analyses disagree on type/collection, stop at the analysis queue instead of silently falling back to `lesson/syntheses`.
+
+Before semantic analysis, materialize the exact Episode evidence:
+
+```bash
+./bin/ikb experience context <experience-id> --run <analyst-run-id> --json
+```
+
+The default includes the complete Episode. `--limit 1..500` is only for bounded inspection and sets `truncated: true`; a truncated Context must not be used as proof that counterevidence is absent. Cite only the returned record IDs or event IDs. If an Episode record cannot be resolved, or the Run/Task scope differs from the Experience scope, stop instead of widening the Source boundary. For an event-backed feedback Experience, open the registered local Artifact and verify its SHA-256 before making a disposition; do not infer missing content from its filename or label.
+
+When the same history session was discovered through multiple local roots, Context groups exact mirror copies into one logical message. Read `equivalentRecordIds` and `equivalentSourceIds` as audit aliases, not as independent evidence. Do not increase recurrence, source diversity, confidence, or candidate eligibility because one message has multiple stored copies.
+
+Weekly clustering may create a `pending_review` Knowledge Candidate only when the same pattern has 3 independent Runs, or 2 independent Runs plus one real verification/evaluation pass. If the Source-to-Run mapping is absent, keep the item in the analysis queue and do not count it as an independent Run. Analyses under one pattern key must also agree on the proposed Knowledge type and collection; disagreement is a modeling conflict, not a reason to invent a generic fallback type. The Analyst must still read the cited evidence and produce a v3 Compilation, complete source/fact dispositions, question results, a type-specific product, validation, confidence, and temporal state before Curator admission. A candidate is not retrievable Knowledge and must not be marked verified automatically.
 
 ## Output contract
 
@@ -193,7 +208,7 @@ knowledge_dispositions:
     decision: admit|skip
     reason: durable value or why no knowledge should be created
 knowledge_compilation:
-  schema: ikb-knowledge-compilation-result.v2
+  schema: ikb-knowledge-compilation-result.v3
   evidence_units:
     - evidence_id: ""
       source_id: ""
@@ -204,6 +219,7 @@ knowledge_compilation:
       attribution_role: speaker|author|creator|owner|modifier|reviewer|record_actor|system|context
       actor: ""
       occurred_at: ""
+      source_unit_refs: []
   facts:
     - fact_id: ""
       fact_kind: ""
@@ -212,6 +228,7 @@ knowledge_compilation:
       derivation: direct|synthesis|inference
       temporal_state: current|historical|planned|superseded|conflicted|unknown
       importance: core|supporting|context
+      reference_fact_refs: []
   coverage:
     - obligation_id: ""
       disposition: covered|omitted|unknown
@@ -225,14 +242,38 @@ knowledge_compilation:
       counterevidence_fact_refs: []
       reasoning: ""
       temporal_state: current|historical|planned|superseded|conflicted|unknown
-  products: [] # typed structures; never a free-form body-only product
+      support_status: supported|partially_supported|contradicted|unsupported
+  source_unit_dispositions:
+    - unit_id: ""
+      disposition: extracted|context_only|duplicate|no_durable_value|unreadable|blocked
+      evidence_ids: []
+      fact_refs: []
+      reason: ""
+  reference_fact_dispositions:
+    - reference_fact_id: ""
+      disposition: preserved|paraphrased|aggregated|view_omitted|gap|conflicted|discarded|lost
+      fact_refs: []
+      reason: ""
+  products: [] # typed structures with canonical_key/operation/unique_value/question_refs
+  question_results:
+    - question_id: ""
+      disposition: answered|gap|not_applicable
+      fact_refs: []
+      product_refs: []
+      reason: ""
 candidate_knowledge:
   - statement
-    suggested_type: fact|decision|preference|playbook|entity|goal
+    suggested_type: architecture|decision|entity|fact|goal|lesson|playbook|preference|synthesis
     suggested_collection: domains|projects|people|concepts|decisions|playbooks|lessons|syntheses
-    quality_version: 4
+    quality_version: 5
     product_type: architecture_map|domain_pack|entity_card|flow_card|decision_card|playbook|lesson|project_goal|person_observation|synthesis
+    canonical_key: ""
+    compilation_schema: ikb-knowledge-compilation-result.v3
+    compilation_case_id: ""
+    compilation_product_id: ""
+    extraction_manifest_ref: ""
     compilation_ref: ""
+    information_loss_ref: ""
     fact_refs: []
     questions_answered: []
     evidence_refs: []

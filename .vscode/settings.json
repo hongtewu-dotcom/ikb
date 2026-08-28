@@ -1,0 +1,19 @@
+{
+  "files.exclude": {
+    "ikb-data/archives": true,
+    "ikb-data/backups": true,
+    "ikb-data/entities": true,
+    "ikb-data/evaluations": true,
+    "ikb-data/experiences": true,
+    "ikb-data/governance": true,
+    "ikb-data/ledger": true,
+    "ikb-data/maintenance": true,
+    "ikb-data/publications": true,
+    "ikb-data/reports": true,
+    "ikb-data/revisions": true,
+    "ikb-data/runs": true,
+    "ikb-data/sources": true,
+    "ikb-data/staging": true,
+    "ikb-data/config.yaml": true
+  }
+}

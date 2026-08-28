@@ -56,7 +56,7 @@ export const GATE_DEFINITIONS: readonly GateDefinition[] = [
     name: "验收与闭环",
     description: "Artifact、测试/验证结果、状态事件、失败原因和下一步均可追溯。",
     implementation: "partial",
-    currentCheck: "Artifact、Run 目录和事件账本已记录；统一 verifier 通过和完成强制条件待补。",
+    currentCheck: "Artifact、Run 目录和事件账本已记录；新知识消费契约下，未完成效果分类的引用会阻止 Run 成功收口；统一 verifier 的其他完成条件仍待补。",
   },
 ];
 

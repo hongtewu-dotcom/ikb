@@ -12,7 +12,7 @@ export const EVAL_VERSION = "v1";
 export const DETERMINISTIC_GRADER_VERSION = "deterministic-v1";
 
 export type EvalLevel = "L1" | "L2" | "L3";
-export type EvalStatus = "pass" | "fail";
+export type EvalStatus = "pass" | "fail" | "inconclusive";
 export type EvalDiagnosis = "subject" | "grader" | "ground_truth" | "environment" | "unknown";
 export type EvalAdapterId = "ikb" | "work-harness" | "specx" | "pipeline";
 export type EvalSuiteKind = "regression" | "run_assessment";
@@ -26,6 +26,7 @@ export interface EvalSuite {
   levels: EvalLevel[];
   graderVersion: string;
   cases: string[];
+  requiredCaseIds?: string[];
   thresholds: Record<string, number>;
   adapter: EvalAdapterId;
 }
@@ -83,6 +84,8 @@ export interface EvalLevelReport {
   passedCases: number;
   failedCases: number;
   failedCaseIds: string[];
+  inconclusiveCases?: number;
+  inconclusiveCaseIds?: string[];
   reasonCodes: Record<string, number>;
 }
 
@@ -152,7 +155,7 @@ export function validateReference(value: unknown, label = "reference"): string {
 
 export function validateEvalSuite(value: unknown): EvalSuite {
   const row = objectValue(value, "EvalSuite");
-  assertAllowedKeys(row, ["schema", "kind", "suiteId", "suiteVersion", "harnessId", "levels", "graderVersion", "cases", "thresholds", "adapter"], "EvalSuite");
+  assertAllowedKeys(row, ["schema", "kind", "suiteId", "suiteVersion", "harnessId", "levels", "graderVersion", "cases", "requiredCaseIds", "thresholds", "adapter"], "EvalSuite");
   if (row.schema !== EVAL_SUITE_SCHEMA) throw new Error(`EvalSuite.schema must be ${EVAL_SUITE_SCHEMA}`);
   const suite: EvalSuite = {
     schema: EVAL_SUITE_SCHEMA,
@@ -178,6 +181,12 @@ export function validateEvalSuite(value: unknown): EvalSuite {
     suite.thresholds[key] = threshold;
   }
   if (new Set(suite.cases).size !== suite.cases.length) throw new Error("EvalSuite.cases must not contain duplicates");
+  if (row.requiredCaseIds !== undefined) {
+    const requiredCaseIds = stringArray(row.requiredCaseIds, "EvalSuite.requiredCaseIds", false).map((item) => identifier(item, "EvalSuite.requiredCaseIds[]"));
+    if (new Set(requiredCaseIds).size !== requiredCaseIds.length) throw new Error("EvalSuite.requiredCaseIds must not contain duplicates");
+    if (requiredCaseIds.some((caseId) => !suite.cases.includes(caseId))) throw new Error("EvalSuite.requiredCaseIds must belong to EvalSuite.cases");
+    suite.requiredCaseIds = requiredCaseIds;
+  }
   return suite;
 }
 
@@ -252,7 +261,7 @@ export function validateEvalResult(value: unknown): EvalResult {
     diagnosis: requiredString(row.diagnosis, "EvalResult.diagnosis") as EvalDiagnosis,
   };
   if (!["L1", "L2", "L3"].includes(result.level)) throw new Error("EvalResult.level is unsupported");
-  if (!["pass", "fail"].includes(result.status)) throw new Error("EvalResult.status is unsupported");
+  if (!["pass", "fail", "inconclusive"].includes(result.status)) throw new Error("EvalResult.status is unsupported");
   if (!["subject", "grader", "ground_truth", "environment", "unknown"].includes(result.diagnosis)) throw new Error("EvalResult.diagnosis is unsupported");
   return result;
 }

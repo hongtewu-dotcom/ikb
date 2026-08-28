@@ -7,20 +7,20 @@
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Users/htwu/projects/ikb/scripts/ikb-report-server.mjs</string>
+    <string>/Users/htwu/projects/_personal/ikb/scripts/ikb-report-server.mjs</string>
     <string>--home</string>
-    <string>/Users/htwu/projects/ikb/ikb-data</string>
+    <string>/Users/htwu/projects/_personal/ikb/ikb-data</string>
     <string>--port</string>
     <string>3417</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/htwu/projects/ikb</string>
+  <string>/Users/htwu/projects/_personal/ikb</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>IKB_PROJECT_ROOT</key>
-    <string>/Users/htwu/projects/ikb</string>
+    <string>/Users/htwu/projects/_personal/ikb</string>
     <key>IKB_HOME</key>
-    <string>/Users/htwu/projects/ikb/ikb-data</string>
+    <string>/Users/htwu/projects/_personal/ikb/ikb-data</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -29,8 +29,8 @@
   <key>ThrottleInterval</key>
   <integer>5</integer>
   <key>StandardOutPath</key>
-  <string>/Users/htwu/projects/ikb/ikb-data/maintenance/report-server.log</string>
+  <string>/Users/htwu/projects/_personal/ikb/ikb-data/.system/cache/logs/report-server.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/htwu/projects/ikb/ikb-data/maintenance/report-server.error.log</string>
+  <string>/Users/htwu/projects/_personal/ikb/ikb-data/.system/cache/logs/report-server.error.log</string>
 </dict>
 </plist>

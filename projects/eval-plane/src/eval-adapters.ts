@@ -1,6 +1,7 @@
-import type { EvalAdapterId, EvalCase } from "./eval-contract.ts";
+import type { EvalAdapterId, EvalCase, EvalStatus } from "./eval-contract.ts";
 import { evaluateRunAssessmentCase } from "./run-assessment.ts";
 import { evaluateWorkRunAssessmentCase, WORK_RUN_QUALITY_SUITE_ID } from "./work-run-assessment.ts";
+import { evaluateSpecxChangeCase, SPECX_CHANGE_QUALITY_SUITE_ID } from "./specx-change-assessment.ts";
 
 export interface EvalSubject {
   adapter: EvalAdapterId;
@@ -13,6 +14,7 @@ export interface EvalSubject {
 export interface AdapterEvaluation {
   observed: string;
   passed: boolean;
+  status?: EvalStatus;
   reasonCodes: string[];
   metrics: Record<string, number | boolean | string>;
   evidenceRefs: string[];
@@ -182,6 +184,7 @@ const specxAdapter: EvalAdapter = {
   version: "specx-adapter-v1",
   load: (value) => safeSubject("specx", value),
   evaluate: (testCase, subject, thresholds = {}) => {
+    if (testCase.suiteId === SPECX_CHANGE_QUALITY_SUITE_ID) return evaluateSpecxChangeCase(testCase, subject);
     const artifacts = objectValue(subject.data.artifacts ?? {}, "SpecX artifacts");
     const coverage = finite(subject.data.ac_coverage ?? subject.data.acCoverage) ?? 0;
     const consistent = bool(subject.data.code_test_consistent ?? subject.data.codeTestConsistent);
