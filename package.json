@@ -13,9 +13,18 @@
   "scripts": {
     "ikb": "node --no-warnings=ExperimentalWarning --experimental-strip-types src/cli.ts",
     "test": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts",
-    "check": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts"
+    "check": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts",
+    "ikb:cards": "node scripts/ikb-cards-cli.mjs",
+    "ikb:workbench": "node scripts/ikb-workbench.mjs",
+    "ikb:workbench:serve": "node scripts/ikb-workbench-server.mjs",
+    "test:public": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/ikb-cards-mcp.test.ts test/ikb-requests.test.ts test/ikb-workbench*.test.ts test/public-default-path.test.ts"
   },
   "dependencies": {
-    "yaml": "2.8.2"
+    "yaml": "2.8.2",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.5.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
   }
 }

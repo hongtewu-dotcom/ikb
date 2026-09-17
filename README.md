@@ -1,3 +1,22 @@
+# IKB：当前卡片入口与工作台
+
+本次更新加入通用 Markdown 卡片检索、请求登记与实时工作台，保留下面的历史平台源码和入口。公开知识见 [knowledge](knowledge/README.md)，共 20 张；上传范围见 [Git 上传边界](docs/git-publication-policy.md)。活动工作库、私有来源、公司集成与完整本机维护材料不随本次更新上传。
+
+```sh
+npm ci
+IKB_CARDS_ROOT=./knowledge npm run ikb:cards -- search --scope work --query "关键词路由 误分类"
+# 使用上一步返回的 retrievalId 和 cardId：
+IKB_CARDS_ROOT=./knowledge npm run ikb:cards -- get --retrieval-id ID --card-id ID
+npm run ikb:workbench:serve
+npm run test:public
+```
+
+默认活动卡目录是当前仓库内的 `ikb-data/cards/`，仍被 Git 忽略；公开副本须通过 `IKB_CARDS_ROOT` 显式选择。公开副本不包含私有原始证据，不能替代业务事实核验。工作台只监听本机回环地址。
+
+`feedback` 和 `request-update` 提供请求登记与状态读取；本次未公开完整维护执行环境及私有回归材料，登记不代表已发布。旧 `bin/ikb` 与 `npm run ikb` 保留为下面历史平台的兼容入口，卡片检索使用 `npm run ikb:cards`。
+
+## 历史平台说明（原有内容保留）
+
 # ikb
 
 ikb 是面向 Agent 的本地知识库。它只承担三件事：保存原始证据、维护可复用知识、记录知识在真实任务中的使用反馈。
