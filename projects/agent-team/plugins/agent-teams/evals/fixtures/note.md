@@ -1,1 +1,0 @@
-release_channel=canary
