@@ -12,7 +12,7 @@ test('metrics count verified card updates by completion time, dedupe and exclude
  const m=buildWorkbenchMetrics({...f,requests:r,historicalIds:['old']});assert.equal(m.knowledge.updatedCards,1);assert.equal(m.knowledge.previous7Days,1);assert.equal(m.decisions.oldestHours,2);assert.equal(m.decisions.pending,1);assert.deepEqual(m.feedback,{total:2,handled:1,deferred:1,pending:0});assert.equal(m.usage.reads,null);
 });
 test('missing, stale and malformed usage are visible and never silently converted to zero',t=>{
- const f=fixture(t);assert.equal(buildWorkbenchMetrics(f).usage.state,'missing');const dir=join(f.root,'usage-v2');mkdirSync(dir);const path=join(dir,'summary.json');
+ const f=fixture(t);assert.equal(buildWorkbenchMetrics(f).usage.state,'missing');const dir=join(f.root,'usage');mkdirSync(dir);const path=join(dir,'summary.json');
  writeFileSync(path,JSON.stringify({schema:'ikb-recall-usage-summary-v2',generatedAt:'2026-09-15T12:00:00Z',window:{last7DaysUtc:{from:'2026-09-08T12:00:00Z',to:'2026-09-15T12:00:00Z'}},last7Days:{reads:4,searches:8,zeroResults:3,cards:{a:{references:2}},origins:{'codex|root|maintenance':8}}}));
  const m=buildWorkbenchMetrics(f);assert.equal(m.usage.state,'stale');assert.equal(m.usage.reads,4);assert.equal(m.usage.references,2);assert.equal(m.usage.origins['codex|root|maintenance'],8);
  writeFileSync(path,'{broken');const broken=buildWorkbenchMetrics(f);assert.equal(broken.usage.state,'invalid');assert.equal(broken.usage.reads,null);

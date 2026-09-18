@@ -17,3 +17,5 @@ IKB 是本地 Markdown 知识库：通过 CLI 搜索和回读卡片，用受控�
 CLI 的 `feedback` 登记使用问题，`request-update` 登记明确更新；提交不代表发布完成。本快照提供请求登记和状态读取，不提供完整生产维护入口；本机生产环境的知识改稿由当前宿主的原生子 Agent 与独立消费者承担，主 Agent 核对证据、准入、发布和最终版本。未包含在公开快照中的私有来源及业务回归材料，不能由公开例子替代；缺少材料时维护应停止并报告缺口。
 
 IKB 检索规则必须由宿主实际加载并执行。安装 CLI、写入 AGENTS.md、出现启动记忆，都不能证明一次真实任务已经执行 search/get。检索或读取次数也不代表知识正确或任务有效。
+
+Usage statistics live in `ikb-data/usage/`; v2 activation selects the current collector and weekly report. For existing split layouts, stop collectors, back up both directories, preserve `usage/inject-log.jsonl`, archive other legacy files under `usage/archive/v1/`, and move `usage-v2` files into `usage/`. Remove the empty `usage-v2` directory before restarting collectors. Historical counts are not merged into v2.

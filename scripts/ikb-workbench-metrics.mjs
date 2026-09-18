@@ -26,7 +26,7 @@ export function buildWorkbenchMetrics({ requests, historicalIds = [], decisionId
     }
   }
   const feedback = current.filter(item => item.request?.kind === 'feedback');
-  const usagePath = join(dirname(intakeRoot), 'usage-v2', 'summary.json');
+  const usagePath = join(dirname(intakeRoot), 'usage', 'summary.json');
   let usage = { state: 'missing', sourcePath: usagePath, reason: '尚无使用统计', reads: null, searches: null, references: null };
   if (existsSync(usagePath)) {
     try {

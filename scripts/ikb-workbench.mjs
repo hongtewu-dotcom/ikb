@@ -369,7 +369,12 @@ function collectIncremental(intakeRoot) {
     }
   }
   const uniqueRoots = [...new Set(roots)].filter((root) => directory(root));
-  const files = [...new Set(uniqueRoots.flatMap((root) => walkFiles(root, (_path, name) => name.toLowerCase().endsWith(".json"), 4)))].sort();
+  // The launcher's refresh receipt is this projection's output, not a source
+  // ledger. Older launchers created it empty before invoking the generator,
+  // so reading it here makes generation depend on its own unfinished output.
+  // Keep parsing actual source JSON strictly; do not hide malformed reports.
+  const files = [...new Set(uniqueRoots.flatMap((root) => walkFiles(root, (_path, name) =>
+    name.toLowerCase().endsWith(".json") && name !== "workbench-refresh.json", 4)))].sort();
   const records = [];
   const unreconciled = [];
   const sourcePaths = [];

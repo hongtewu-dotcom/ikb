@@ -132,6 +132,31 @@ test("malformed source is a recoverable 503 and never an empty success", async (
   assert.match(payload.error, /request status read failed/);
 });
 
+test("refresh output never becomes snapshot input, while broken run reports still fail", async (t) => {
+  const f = fixture(t);
+  const runDir = join(f.intakeRoot, "runs", "catdesk-increment", "prepare-test");
+  mkdirSync(runDir, { recursive: true });
+  const report = join(runDir, "report.json");
+  const refresh = join(runDir, "workbench-refresh.json");
+  writeFileSync(report, JSON.stringify({ status: "completed", summary: "actual run evidence" }));
+  writeFileSync(refresh, ""); // Existing failed shell redirection from the incident.
+  writeFileSync(join(runDir, ".workbench-refresh-test.tmp"), "{");
+  const running = await runningServer(t, f.intakeRoot);
+  for (const output of ["", "{", JSON.stringify({ status: "waiting", reason: "projection only" })]) {
+    writeFileSync(refresh, output);
+    const response = await httpGet(running.port, "/api/snapshot");
+    assert.equal(response.status, 200, response.body);
+    const snapshot = JSON.parse(response.body).snapshot;
+    assert.equal(snapshot.recentRuns[0].summary, "actual run evidence");
+    assert.equal(snapshot.incremental.records.some((item: { path: string }) => item.path === refresh), false);
+    assert.equal(snapshot.incremental.unreconciled.length, 0);
+  }
+  writeFileSync(report, "");
+  const failed = await httpGet(running.port, "/api/snapshot");
+  assert.equal(failed.status, 503);
+  assert.match(JSON.parse(failed.body).error, /report\.json: malformed JSON/);
+});
+
 test("HTTP surface is local, same-origin GET only, with a real-time page shell", async (t) => {
   const f = fixture(t);
   const running = await runningServer(t, f.intakeRoot);

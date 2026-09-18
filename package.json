@@ -8,10 +8,12 @@
     "node": ">=22.6.0"
   },
   "scripts": {
-    "test": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts",
+    "test": "node --no-warnings=ExperimentalWarning --experimental-strip-types --test test/*.test.ts projects/eval-plane/test/*.test.ts",
     "ikb:cards": "node scripts/ikb-cards-cli.mjs",
     "ikb:workbench": "node scripts/ikb-workbench.mjs",
-    "ikb:workbench:serve": "node scripts/ikb-workbench-server.mjs"
+    "ikb:workbench:serve": "node scripts/ikb-workbench-server.mjs",
+    "eval:ikb-recall": "node --experimental-strip-types projects/eval-plane/src/ikb-recall-cli.ts collect",
+    "eval:weekly-summary": "node --experimental-strip-types projects/eval-plane/src/ikb-weekly-summary-cli.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
