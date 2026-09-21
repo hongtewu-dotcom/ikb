@@ -359,6 +359,70 @@ function workspaceResultState(workspace) {
   return { status: "excluded", result, pendingReasons: [] };
 }
 
+function readIncrementalJson(path) {
+  try { return jsonRead(path); } catch (error) { fail("incrementalReviewReady", `${path}: invalid JSON (${error.message})`); }
+}
+
+function incrementalReviewInputs(root) {
+  const workspace = join(root, "maintenance", "incremental-live");
+  if (!existsSync(workspace)) return [];
+  let workspaceStat;
+  try { workspaceStat = lstatSync(workspace); } catch (error) { fail("incrementalReviewReady", `${workspace}: unreadable workspace (${error.message})`); }
+  if (!workspaceStat.isDirectory() || workspaceStat.isSymbolicLink()) fail("incrementalReviewReady", `${workspace}: regular directory required`);
+
+  const inventoryPath = join(workspace, "inventory.json");
+  if (!existsSync(inventoryPath)) fail("incrementalReviewReady", `${inventoryPath}: required`);
+  const inventory = readIncrementalJson(inventoryPath);
+  if (!isObject(inventory) || inventory.schema !== "ikb-maintenance-inventory-v1") fail("incrementalReviewReady", `${inventoryPath}: invalid maintenance inventory schema`);
+  if (typeof inventory.workspace !== "string" || resolve(inventory.workspace) !== resolve(workspace)) fail("incrementalReviewReady", `${inventoryPath}: workspace does not match incremental-live directory`);
+  if (!Array.isArray(inventory.members)) fail("incrementalReviewReady", `${inventoryPath}: members array required`);
+  const memberKeys = new Set();
+  for (const [index, member] of inventory.members.entries()) {
+    if (!isObject(member) || typeof member.key !== "string" || !member.key.trim()) fail("incrementalReviewReady", `${inventoryPath}: members[${index}].key required`);
+    if (memberKeys.has(member.key)) fail("incrementalReviewReady", `${inventoryPath}: duplicate member key ${member.key}`);
+    memberKeys.add(member.key);
+  }
+
+  const resultsRoot = join(workspace, "results");
+  if (!existsSync(resultsRoot)) fail("incrementalReviewReady", `${resultsRoot}: required results directory`);
+  let entries;
+  try { entries = readdirSync(resultsRoot, { withFileTypes: true }); } catch (error) { fail("incrementalReviewReady", `${resultsRoot}: unreadable results directory (${error.message})`); }
+  const jsonEntries = entries.filter(entry => entry.name.endsWith(".json"));
+  for (const entry of jsonEntries) {
+    if (!entry.isFile() || entry.isSymbolicLink()) fail("incrementalReviewReady", `${join(resultsRoot, entry.name)}: regular file required`);
+    if (!/^\d+\.json$/u.test(entry.name)) fail("incrementalReviewReady", `${join(resultsRoot, entry.name)}: numeric result filename required`);
+  }
+  const resultPaths = jsonEntries
+    .sort((left, right) => Number(left.name.slice(0, -5)) - Number(right.name.slice(0, -5)))
+    .map(entry => join(resultsRoot, entry.name));
+  const latest = new Map();
+  const records = [];
+  for (const resultPath of resultPaths) {
+    const result = readIncrementalJson(resultPath);
+    if (!isObject(result)) fail("incrementalReviewReady", `${resultPath}: result object required`);
+    if (!Array.isArray(result.members) || result.members.length === 0) fail("incrementalReviewReady", `${resultPath}: members array required`);
+    const seen = new Set();
+    for (const [index, key] of result.members.entries()) {
+      if (typeof key !== "string" || !key.trim()) fail("incrementalReviewReady", `${resultPath}: members[${index}] must be a nonempty string`);
+      if (seen.has(key)) fail("incrementalReviewReady", `${resultPath}: duplicate member key ${key}`);
+      if (!memberKeys.has(key)) fail("incrementalReviewReady", `${resultPath}: unknown member key ${key}`);
+      seen.add(key);
+      latest.set(key, { resultPath, result });
+    }
+    if (!["no_change", "exclude", "defer", "propose_change"].includes(result.action)) fail("incrementalReviewReady", `${resultPath}: invalid action`);
+    if (Object.hasOwn(result, "targetCardId") && result.targetCardId !== null && (typeof result.targetCardId !== "string" || !result.targetCardId.trim())) fail("incrementalReviewReady", `${resultPath}: targetCardId must be a nonempty string or null`);
+    records.push({ resultPath, result });
+  }
+
+  return records.flatMap(({ resultPath, result }) => {
+    const memberKeysForResult = result.members.filter(key => latest.get(key)?.resultPath === resultPath && latest.get(key)?.result.action === "propose_change");
+    if (!memberKeysForResult.length) return [];
+    const item = { workspace, resultPath, memberKeys: memberKeysForResult };
+    if (Object.hasOwn(result, "targetCardId")) item.targetCardId = result.targetCardId;
+    return [item];
+  });
+}
+
 function finalFailureReasons(final) {
   const failures = Array.isArray(final?.failures) ? final.failures : [];
   const reasons = failures.map((failure) => {
@@ -429,9 +493,10 @@ export function listRequests({ intakeRoot = process.env.IKB_INTAKE_ROOT ?? DEFAU
 // request events and maintenance/publication artifacts.
 export function captureRequestInputs({intakeRoot=process.env.IKB_INTAKE_ROOT??DEFAULT_INTAKE_ROOT}={}){
   const root=resolve(intakeRoot);
-  const pendingVisible=listRequests({intakeRoot:root,pending:true}).map(item=>({requestId:item.requestId,kind:item.request.kind,status:item.status,requestPath:item.requestPath,reportPath:item.reportPath,pendingReasons:item.pendingReasons,decision:item.decision}));
+  const pendingVisible=listRequests({intakeRoot:root,pending:true}).map(item=>({requestId:item.requestId,kind:item.request.kind,status:item.status,requestPath:item.requestPath,reportPath:item.reportPath,pendingReasons:item.pendingReasons,decision:item.decision,workspace:item.workspace,resultAction:item.result?.action??null}));
   const feedbackReady=pendingVisible.filter(item=>!item.decision?.required&&item.kind==='feedback'&&['submitted','prepared'].includes(item.status)).slice(0,10).map(item=>({...item,workspace:join(root,'maintenance','requests',item.requestId)}));
-  return {schema:'ikb-request-inputs-v1',intakeRoot:root,capturedAt:new Date().toISOString(),items:pendingVisible,pendingVisible,feedbackReady,runnable:pendingVisible.filter(item=>!item.decision?.required&&item.kind==='update'&&item.status==='queued')};
+  const incrementalReviewReady=incrementalReviewInputs(root);
+  return {schema:'ikb-request-inputs-v1',intakeRoot:root,capturedAt:new Date().toISOString(),items:pendingVisible,pendingVisible,feedbackReady,reviewReady:pendingVisible.filter(item=>!item.decision?.required&&item.status==='waiting'&&item.resultAction==='propose_change'),verificationReady:pendingVisible.filter(item=>!item.decision?.required&&item.status==='published_unverified'),incrementalReviewReady,runnable:pendingVisible.filter(item=>!item.decision?.required&&item.kind==='update'&&item.status==='queued')};
 }
 
 export function submitRequest(input, { kind = "update", intakeRoot = process.env.IKB_INTAKE_ROOT ?? DEFAULT_INTAKE_ROOT, cardsRoot = process.env.IKB_CARDS_ROOT } = {}) {

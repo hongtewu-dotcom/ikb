@@ -165,3 +165,12 @@ test("the explicit people list controls priority and missing frameworks cannot h
   assert.ok(html.indexOf('<h3>指定人物</h3>') < html.indexOf('<summary>其他人物（补充收集）</summary>'));
   assert.ok(html.indexOf('<h3>附加人物</h3>') > html.indexOf('<summary>其他人物（补充收集）</summary>'));
 });
+
+test('recent run exposes delivery partial rather than process success or newer prose', t=>{
+ const f=fixture(t),run=join(f.intakeRoot,'runs','delivery-run');mkdirSync(run,{recursive:true});
+ writeFileSync(join(run,'report.json'),JSON.stringify({status:'success',delivery:{status:'partial'},generatedAt:'2026-09-01T00:00:00.000Z'}));
+ writeFileSync(join(run,'report.md'),'# Process finished\n');
+ const snapshot=buildSnapshot({intakeRoot:f.intakeRoot});
+ assert.equal(snapshot.recentRuns[0].status,'partial');
+ assert.equal(snapshot.recentRuns[0].sourcePath,join(run,'report.json'));
+});

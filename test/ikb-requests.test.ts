@@ -164,6 +164,7 @@ test("status requires publication success and final verification bound to curren
   writeFileSync(join(workspace, "publication-result.json"), JSON.stringify({ schema: "ikb-publication-result-v1", ok: true, status: "success", requestId: request.requestId, planHash, cardsRoot: f.cardsRoot, written: [targetPath], operations: [{cardId: "target", action: "modify", path: targetPath, before: readFileSync(targetPath,"utf8"), after: readFileSync(targetPath,"utf8")}] }));
   writeFileSync(join(workspace, "final-verification.json"), JSON.stringify({ schema: "ikb-final-verification-v1", ok: true, requestId: request.requestId, planHash, publicationRef: join(workspace, "publication-result.json"), workspace, changes: [{ cardId: "target", path: targetPath, afterHash: targetHash }] }));
   assert.equal(requestStatus(request.requestId, { intakeRoot: f.intakeRoot }).status, "completed");
+  assert.equal(captureRequestInputs({intakeRoot:f.intakeRoot}).verificationReady.length,0);
   assert.throws(() => recordRequestEvent(request.requestId, { type: "published" }, { intakeRoot: f.intakeRoot }), /publication/);
 
   const verificationFailure = submitRequest(f.input({ source: { host: "catdesk", sessionId: "verification-failure", messageId: "verification-failure", reference: f.source } }), { kind: "update", intakeRoot: f.intakeRoot, cardsRoot: f.cardsRoot, wake: false });
@@ -188,6 +189,7 @@ test("status requires publication success and final verification bound to curren
   writeFileSync(join(addWorkspace, "publication-result.json"), JSON.stringify({ schema: "ikb-publication-result-v1", ok: true, status: "success", requestId: addRequest.requestId, planHash: addPlanHash, cardsRoot: f.cardsRoot, written: [addPath], operations: [{cardId: "added", action: "add", path: addPath, before: null, after: "candidate bytes\n"}] }));
   writeFileSync(join(addWorkspace, "final-verification.json"), JSON.stringify({ schema: "ikb-final-verification-v1", ok: true, requestId: addRequest.requestId, planHash: addPlanHash, publicationRef: join(addWorkspace, "publication-result.json"), changes: [{ cardId: "added", path: addPath, afterHash: createHash("sha256").update("candidate bytes\n").digest("hex") }] }));
   assert.equal(requestStatus(addRequest.requestId, { intakeRoot: f.intakeRoot }).status, "published_unverified", "a missing current add target cannot complete from a final hash alone");
+  assert.deepEqual(captureRequestInputs({intakeRoot:f.intakeRoot}).verificationReady.map(item=>item.requestId),[addRequest.requestId]);
 });
 
 test("a native continuation preserves old failures without hiding the current attempt", (t) => {
@@ -202,4 +204,76 @@ test("a native continuation preserves old failures without hiding the current at
   assert.equal(state.status,'waiting');
   assert.deepEqual(state.pendingReasons,['native model capacity unavailable']);
   assert.ok(state.events.some(e=>e.type==='failed'));
+});
+
+test('scheduled input resumes proposed feedback without retrying deferred or failed work', (t) => {
+  const f = fixture(t);
+  const r = submitRequest(f.input({ targetCardId: undefined, change: undefined }), {kind:'feedback',intakeRoot:f.intakeRoot,cardsRoot:f.cardsRoot});
+  const workspace = join(f.root,'workspace'); mkdirSync(join(workspace,'results'),{recursive:true});
+  recordRequestEvent(r.requestId,{type:'workspace',workspace},{intakeRoot:f.intakeRoot});
+  writeFileSync(join(workspace,'results','1.json'),JSON.stringify({action:'propose_change',reason:'ready for review'}));
+  assert.equal(captureRequestInputs({intakeRoot:f.intakeRoot}).reviewReady[0].workspace,workspace);
+  writeFileSync(join(workspace,'results','2.json'),JSON.stringify({action:'defer',reason:'source missing'}));
+  assert.equal(captureRequestInputs({intakeRoot:f.intakeRoot}).reviewReady.length,0);
+  writeFileSync(join(workspace,'results','3.json'),JSON.stringify({action:'propose_change',reason:'new evidence'}));
+  recordRequestEvent(r.requestId,{type:'failed',reason:'real failure'},{intakeRoot:f.intakeRoot});
+  const snapshot=captureRequestInputs({intakeRoot:f.intakeRoot});
+  assert.equal(snapshot.reviewReady.length,0);
+  assert.equal(snapshot.pendingVisible[0].status,'failed');
+});
+
+test('prepare input includes the latest incremental proposals even when requests are empty', (t) => {
+  const f = fixture(t);
+  const workspace = join(f.intakeRoot, 'maintenance', 'incremental-live');
+  mkdirSync(join(workspace, 'results'), { recursive: true });
+  const memberA = 'member-a';
+  const memberB = 'member-b';
+  const memberC = 'member-c';
+  writeFileSync(join(workspace, 'inventory.json'), JSON.stringify({
+    schema: 'ikb-maintenance-inventory-v1',
+    workspace,
+    cardsRoot: f.cardsRoot,
+    publishRoot: join(workspace, 'published', 'cards'),
+    source: { kind: 'intake', root: f.intakeRoot },
+    members: [{ key: memberA }, { key: memberB }, { key: memberC }],
+  }));
+  writeFileSync(join(workspace, 'results', '9.json'), JSON.stringify({
+    members: [memberA, memberB], action: 'propose_change', targetCardId: 'card-9',
+  }));
+  writeFileSync(join(workspace, 'results', '10.json'), JSON.stringify({
+    members: [memberA], action: 'no_change', targetCardId: 'target',
+  }));
+  writeFileSync(join(workspace, 'results', '11.json'), JSON.stringify({
+    members: [memberC], action: 'defer', missing: ['more evidence'],
+  }));
+  const snapshot = captureRequestInputs({ intakeRoot: f.intakeRoot });
+  assert.deepEqual(snapshot.pendingVisible, []);
+  assert.deepEqual(snapshot.incrementalReviewReady, [{
+    workspace,
+    resultPath: join(workspace, 'results', '9.json'),
+    memberKeys: [memberB],
+    targetCardId: 'card-9',
+  }]);
+});
+
+test('incremental input keeps targetless proposals explicit and reports damaged ledgers', (t) => {
+  const f = fixture(t);
+  const workspace = join(f.intakeRoot, 'maintenance', 'incremental-live');
+  mkdirSync(join(workspace, 'results'), { recursive: true });
+  writeFileSync(join(workspace, 'inventory.json'), JSON.stringify({
+    schema: 'ikb-maintenance-inventory-v1', workspace, cardsRoot: f.cardsRoot,
+    publishRoot: join(workspace, 'published', 'cards'), source: { kind: 'intake', root: f.intakeRoot },
+    members: [{ key: 'targetless' }],
+  }));
+  writeFileSync(join(workspace, 'results', '1.json'), JSON.stringify({ members: ['targetless'], action: 'propose_change' }));
+  const item = captureRequestInputs({ intakeRoot: f.intakeRoot }).incrementalReviewReady[0];
+  assert.equal(item.targetCardId, undefined);
+  assert.equal(Object.hasOwn(item, 'targetCardId'), false);
+  writeFileSync(join(workspace, 'results', '2.json'), '{broken');
+  assert.throws(() => captureRequestInputs({ intakeRoot: f.intakeRoot }), /incremental-live.*results.*2\.json.*invalid JSON/);
+});
+
+test('missing incremental workspace contributes an empty projection', (t) => {
+  const f = fixture(t);
+  assert.deepEqual(captureRequestInputs({ intakeRoot: f.intakeRoot }).incrementalReviewReady, []);
 });

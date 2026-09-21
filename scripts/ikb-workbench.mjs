@@ -302,7 +302,8 @@ function reportFileName(name) {
 
 function explicitStatus(value) {
   if (!isObject(value)) return null;
-  return nonempty(value.status)
+  return nonempty(value.delivery?.status)
+    ?? nonempty(value.status)
     ?? nonempty(value.state)
     ?? nonempty(value.outcome?.status)
     ?? nonempty(value.result?.status)
@@ -354,7 +355,7 @@ function collectRecentRuns(intakeRoot) {
     };
     const existing = byRun.get(runId);
     const priority = (name) => name.toLowerCase() === "report.json" ? 3 : name.toLowerCase().includes("report") ? 2 : 1;
-    const better = !existing || priority(path.split(sep).at(-1)) > priority(existing.sourcePath.split(sep).at(-1)) || candidate.recordedAt > existing.recordedAt;
+    const better = !existing || priority(path.split(sep).at(-1)) > priority(existing.sourcePath.split(sep).at(-1)) || (priority(path.split(sep).at(-1)) === priority(existing.sourcePath.split(sep).at(-1)) && candidate.recordedAt > existing.recordedAt);
     if (better) byRun.set(runId, candidate);
   }
   return [...byRun.values()].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt) || a.runId.localeCompare(b.runId)).slice(0, MAX_RECENT_RUNS);
