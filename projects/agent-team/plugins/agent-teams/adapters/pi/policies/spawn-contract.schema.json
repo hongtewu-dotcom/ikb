@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "agent-teams/pi/spawn-contract.v1",
+  "title": "agent-teams Pi spawn contract",
+  "description": "Mandatory branch contract for every delegated agent in pi-dynamic-workflows. Prompts must carry all fields below; writing branches additionally define write_scope, forbidden_scope, depends_on, and produces, with an optional first_checkpoint when intermediate inspection is materially safer. Mirrors the host-independent parts of the Codex adapter contract.",
+  "type": "object",
+  "required": [
+    "goal",
+    "scope",
+    "acceptance",
+    "handoff"
+  ],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-sentence objective for the branch."
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bounded responsibility of this branch; what it may touch and what it must not."
+    },
+    "acceptance": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "description": "Mechanically checkable conditions the parent verifies after the handoff."
+    },
+    "handoff": {
+      "type": "object",
+      "required": [
+        "status",
+        "summary",
+        "evidence",
+        "changes",
+        "validation",
+        "gaps"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "partial",
+            "blocked"
+          ],
+          "description": "Execution outcome. Never a quality verdict."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Concise outcome. Raw tool output stays in artifacts."
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Stable references (paths, commit, hashes) rather than copied raw output."
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Files or artifacts produced/modified by this branch."
+        },
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Checks run and their results."
+        },
+        "gaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Uncovered scope or known unknowns returned to the parent."
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+{
+  "name": "agent-teams",
+  "version": "1.3.1",
+  "description": "Bounded subagent delegation governance for Codex and Pi hosts",
+  "author": {
+    "name": "wuhongteng"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Install the repository's agent-call launcher into a user-controlled bin dir.
+# No host configuration is changed; callers can register the resulting command
+# with their own PATH or invoke it by its absolute path.
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -P "$SCRIPT_DIR/.." && pwd)
+SOURCE=$REPO_ROOT/bin/agent-call
+if [ -n "${AGENT_CALL_BIN_DIR:-}" ]; then
+  BIN_DIR=$AGENT_CALL_BIN_DIR
+elif [ -n "${HOME:-}" ]; then
+  BIN_DIR=$HOME/.local/bin
+else
+  echo "HOME or AGENT_CALL_BIN_DIR is required" >&2
+  exit 1
+fi
+
+if [ ! -x "$SOURCE" ]; then
+  echo "agent-call launcher is missing or not executable: $SOURCE" >&2
+  exit 1
+fi
+if [ -z "$BIN_DIR" ] || [ "$BIN_DIR" = "/" ]; then
+  echo "refusing unsafe install directory: ${BIN_DIR:-<empty>}" >&2
+  exit 1
+fi
+DEST=$BIN_DIR/agent-call
+if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
+  echo "refusing to replace existing non-symlink: $DEST" >&2
+  exit 1
+fi
+
+mkdir -p "$BIN_DIR"
+ln -sfn "$SOURCE" "$DEST"
+echo "installed $DEST -> $SOURCE"

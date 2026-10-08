@@ -1,0 +1,20 @@
+{
+  "name": "ikb-agent-team-dev",
+  "owner": {
+    "name": "wuhongteng"
+  },
+  "metadata": {
+    "description": "Unreleased Agent Team development marketplace",
+    "version": "0.1.0-dev"
+  },
+  "plugins": [
+    {
+      "name": "agent-teams",
+      "source": "./plugins/agent-teams",
+      "description": "Bounded subagent delegation governance for Codex and Pi hosts",
+      "version": "0.1.0-dev",
+      "license": "MIT",
+      "category": "workflows"
+    }
+  ]
+}

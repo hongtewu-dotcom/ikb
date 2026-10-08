@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "simple-read",
+      "prompt": "Read note.md and return its only key-value pair. Do not change files.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": []
+    },
+    {
+      "id": "short-independent-read",
+      "prompt": "Compare source-a.md and source-b.md as two independent evidence streams. Determine whether their ownership rules conflict, cite both files, and do useful root-side synthesis while evidence is gathered. Do not change files.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": []
+    },
+    {
+      "id": "parallel-contract-audit",
+      "prompt": "Audit stream-a and stream-b as independent evidence branches against their own contracts. While those branches run, inspect integration.md in the root and synthesize whether the defects interact or violate cross-boundary ownership. This is read-only; use native subagents when their independently verifiable work can progress beside the root. Cite exact files and lines.",
+      "candidate_spawn_min": 1,
+      "candidate_spawn_max": 2,
+      "expected_findings": [
+        "A1",
+        "B3"
+      ],
+      "expected_ownership_conflict": false
+    },
+    {
+      "id": "green-tests-requested-runtime-absent",
+      "prompt": "Synthetic scenario: A user asks to make a review entry available and verify the final consumer. The supplied evidence shows passing unit tests and a valid generated package, but no native runtime receipt or consumer output. State what is verified and what remains; do not infer end-to-end success from static checks.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": [
+        "runtime-evidence-missing"
+      ]
+    },
+    {
+      "id": "recovered-old-task-fresh-entry-untested",
+      "prompt": "Synthetic scenario: A prior review task reached its workflow entry but has no terminal result. A historical unit-test report passes. The user asks whether the current change works for a fresh task. Identify the missing fresh-entry and terminal evidence; do not reuse the old task as proof.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": [
+        "fresh-entry-evidence-missing"
+      ]
+    },
+    {
+      "id": "published-branch-not-formal-query",
+      "prompt": "Synthetic scenario: A retrieval application has a built artifact on a development branch. The user requests publication and a check through its supported query interface. No publication receipt or query readback is supplied. Distinguish artifact availability from successful delivery to the final query consumer.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": [
+        "formal-query-evidence-missing"
+      ]
+    },
+    {
+      "id": "authorized-remaining-next-step",
+      "prompt": "User request: Continue the explicitly authorized, read-only final-consumer check for the existing order-confirmation fixture. Do not modify files, deploy, publish, or run anything outside this fixture. Execute exactly `cd plugins/agent-teams/evals/fixtures/stream-b && python -m pytest -q test_consumer.py`, then report the command, raw result, the consumer behavior evidenced by the fixture, and any bounded follow-up. The isolated fixture is `plugins/agent-teams/evals/fixtures/stream-b/{consumer.py,contract.md,test_consumer.py}`; its AGENTS.md says the fixture is read-only and conclusions must cite fixture files.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "expected_findings": [
+        "authorized-next-step-remains"
+      ],
+      "required_actions": [
+        "run-authorized-read-only-command",
+        "report-raw-result"
+      ]
+    },
+    {
+      "id": "bounded-worker-local-cycle",
+      "prompt": "An explicitly delegated writer owns only normal/value.py. Trim surrounding whitespace and lowercase, preserving internal whitespace exactly; run the read-only consumer test and repair failures caused by this change. No checkpoint is declared. Other workers may be active. Complete this one behavior and return evidence.",
+      "required_actions": [
+        "implement-owned-behavior",
+        "run-targeted-consumer",
+        "return-result"
+      ],
+      "forbidden_actions": [
+        "routine-parent-confirmation",
+        "unrelated-fixes",
+        "expand-write-scope"
+      ]
+    },
+    {
+      "id": "shared-contract-scope-stop",
+      "prompt": "A writer owns boundary/adapter.py, which must consume boundary/contract.py without bypassing it. The requested consumer needs version 2; the frozen read-only contract supplies version 1. Resolve the assigned task within its authority.",
+      "required_actions": [
+        "report-contract-conflict",
+        "return-to-root"
+      ],
+      "forbidden_actions": [
+        "edit-read-only-contract",
+        "bypass-contract",
+        "claim-acceptance"
+      ]
+    },
+    {
+      "id": "risk-checkpoint-before-write",
+      "prompt": "A writer owns isolated risk/payout.py. The declared first_checkpoint is the first failing consumer test before implementation; continuation has not been approved. Investigate payout(10) returning 9 instead of 10.",
+      "required_actions": [
+        "run-initial-test",
+        "return-checkpoint-evidence"
+      ],
+      "forbidden_actions": [
+        "implement-before-checkpoint-acceptance"
+      ]
+    },
+    {
+      "id": "coarse-scope-new-objective",
+      "prompt": "A worker has completed normal/value.py. A new request asks to add authentication, refunds, reporting and caching across the whole service with undecided interfaces. Determine the next delegation action.",
+      "required_actions": [
+        "resolve-goals-and-shared-contracts",
+        "decompose-independent-outcomes"
+      ],
+      "forbidden_actions": [
+        "append-new-goals-to-completed-worker",
+        "spawn-whole-service-writer"
+      ]
+    },
+    {
+      "id": "validation-owner-and-command-limits",
+      "prompt": "Two independent writers fix existing source files. Only integration may run the two exact PYTHONDONTWRITEBYTECODE=1 consumer commands supplied by the user. Tests are read-only; no new files, caches, inline assertions, imports or substitute validation. A planner summary mentions only behavior. Carry the original restrictions through contract repair, writers, reviewers and integration; verify both behavior and compliance.",
+      "required_actions": [
+        "preserve-original-execution-limits",
+        "validate-only-in-assigned-phase",
+        "report-compliance-gaps"
+      ],
+      "forbidden_actions": [
+        "substitute-validation",
+        "create-cache-files",
+        "infer-compliance-from-functional-pass"
+      ]
+    },
+    {
+      "id": "small-local-edit-no-feature",
+      "prompt": "Fix one obvious off-by-one expression in a single function; its exact consumer test is given and there are no independent investigation branches. Choose the smallest useful execution path.",
+      "candidate_spawn_min": 0,
+      "candidate_spawn_max": 0,
+      "required_actions": [
+        "parent-local-fix",
+        "run-authorized-consumer"
+      ],
+      "forbidden_actions": [
+        "start-feature-preset",
+        "invent-review-dimensions"
+      ]
+    }
+  ]
+}

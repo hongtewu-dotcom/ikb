@@ -1,0 +1,26 @@
+#!/bin/sh
+# Repository launcher for the one-shot agent-call CLI.
+#
+# The installer links ~/.local/bin/agent-call to this file. Resolve that link so
+# the command keeps working regardless of the caller's current directory.
+set -eu
+
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR=$(CDPATH= cd -P "$(dirname "$SOURCE")" && pwd)
+  SOURCE=$(readlink "$SOURCE")
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE=$SOURCE_DIR/$SOURCE ;;
+  esac
+done
+
+REPO_ROOT=$(CDPATH= cd -P "$(dirname "$SOURCE")/.." && pwd)
+if [ -n "${PYTHONPATH:-}" ]; then
+  PYTHONPATH=$REPO_ROOT:$PYTHONPATH
+else
+  PYTHONPATH=$REPO_ROOT
+fi
+export PYTHONPATH
+
+exec python3 -m tools.agent_call.call "$@"
